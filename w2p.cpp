@@ -14,7 +14,6 @@ int captk = 0;//number of units in captured array
 byte ua[255] = { 255 };//attackers array
 byte ut[255] = { 255 };//targets array     only unit ua[i] can deal damage to unit ut[i]
 byte runes[9] = { 0 };//runestone special abilities flags
-bool table = false;//show win/lose table
 bool agr = false;//allied comps aggro if attacked
 bool cpt = false;//can buildings be captured on low hp
 bool pcpt = false;//only peons can capture low hp build
@@ -109,7 +108,7 @@ bool cmp_args2(byte m, WORD v, WORD c)
 }
 
 bool cmp_args4(byte m, int v, int c)
-{//comapre 4 bytes (for resources)
+{//compare 4 bytes (for resources)
     bool f = false;
     switch (m)
     {
@@ -842,7 +841,7 @@ void damag(int* p, byte n)
 {
     //dealt X damage to unit
     WORD hp = *((WORD*)((uintptr_t)p + S_HP));//unit hp
-    if (hp < n)
+    if (hp > n)
     {
         hp -= n;
         set_stat(p, hp, S_HP);
