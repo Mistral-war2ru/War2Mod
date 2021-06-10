@@ -3536,9 +3536,8 @@ PROC g_proc_00424745;//entering
 PROC g_proc_004529C0;//grow struct
 int goods_into_inventory(int* p)
 {
-    //use this function if you need to change how much resources peon/tanker bring back
-    /*
-    if (FALSE)
+//use this function if you need to change amount of res peon or tanker bring back
+    if (replaced)
     {
         int tr = (*(int*)((uintptr_t)p + S_ORDER_UNIT_POINTER));
         if (tr != 0)
@@ -3552,92 +3551,95 @@ int goods_into_inventory(int* p)
             int pflag = *(int*)(UNIT_GLOBAL_FLAGS + id * 4);
             int tflag = *(int*)(UNIT_GLOBAL_FLAGS + tid * 4);
             int res = 100;
-            if (((pflag & IS_SHIP) != 0) && ((tflag & IS_OILRIG) == 0))
+            if (pf & PEON_LOADED)
             {
-                int r = get_val(REFINERY, o);
-                if (more_res)
+                if (((pflag & IS_SHIP) != 0) && ((tflag & IS_OILRIG) == 0))
                 {
-                    res = 100 + 25 * r;
-                }
-                else
-                {
-                    if (r != 0)
+                    int r = get_val(REFINERY, o);
+                    if (more_res)
                     {
-                        res = 125;
+                        res = 100 + 25 * r;
                     }
                     else
                     {
-                        res = 100;
-                    }
-                }
-                change_res(o, 2, 1, res);
-                add_total_res(o, 2, 1, res);
-                f = true;
-            }
-            else
-            {
-                if (((tflag & IS_TOWNHALL) != 0) || ((tflag & IS_LUMBER) != 0))
-                {
-                    if (((tflag & IS_TOWNHALL) != 0))
-                    {
-                        pf |= PEON_IN_CASTLE;
-                        set_stat(p, pf, S_PEON_FLAGS);
-                    }
-                    if (((pf & PEON_HARVEST_GOLD) != 0) && ((tflag & IS_TOWNHALL) != 0))
-                    {
-                        int r2 = get_val(TH2, o);
-                        int r3 = get_val(TH3, o);
-                        if (more_res)
+                        if (r != 0)
                         {
-                            res = 100 + 10 * r2 + 20 * r3;
+                            res = 125;
                         }
                         else
                         {
-                            if (r3 != 0)
-                            {
-                                res = 120;
-                            }
-                            else
-                            {
-                                if (r2 != 0)
-                                {
-                                    res = 110;
-                                }
-                                else
-                                {
-                                    res = 100;
-                                }
-                            }
+                            res = 100;
                         }
-                        pf &= ~PEON_HARVEST_GOLD;
-                        change_res(o, 0, 1, res);
-                        add_total_res(o, 0, 1, res);
-                        f = true;
                     }
-                    else
+                    change_res(o, 2, 1, res);
+                    add_total_res(o, 2, 1, res);
+                    f = true;
+                }
+                else
+                {
+                    if (((tflag & IS_TOWNHALL) != 0) || ((tflag & IS_LUMBER) != 0))
                     {
-                        if (((pf & PEON_HARVEST_LUMBER) != 0))
+                        if (((tflag & IS_TOWNHALL) != 0))
                         {
-                            int r = get_val(LUMBERMILL, o);
+                            pf |= PEON_IN_CASTLE;
+                            set_stat(p, pf, S_PEON_FLAGS);
+                        }
+                        if (((pf & PEON_HARVEST_GOLD) != 0) && ((tflag & IS_TOWNHALL) != 0))
+                        {
+                            int r2 = get_val(TH2, o);
+                            int r3 = get_val(TH3, o);
                             if (more_res)
                             {
-                                res = 100 + 25 * r;
+                                res = 100 + 10 * r2 + 20 * r3;
                             }
                             else
                             {
-                                if (r != 0)
+                                if (r3 != 0)
                                 {
-                                    res = 125;
+                                    res = 120;
                                 }
                                 else
                                 {
-                                    res = 100;
+                                    if (r2 != 0)
+                                    {
+                                        res = 110;
+                                    }
+                                    else
+                                    {
+                                        res = 100;
+                                    }
                                 }
                             }
-                            pf &= ~PEON_HARVEST_LUMBER;
-                            change_res(o, 1, 1, res);
-                            add_total_res(o, 1, 1, res);
+                            pf &= ~PEON_HARVEST_GOLD;
+                            change_res(o, 0, 1, res);
+                            add_total_res(o, 0, 1, res);
                             f = true;
+                        }
+                        else
+                        {
+                            if (((pf & PEON_HARVEST_LUMBER) != 0))
+                            {
+                                int r = get_val(LUMBERMILL, o);
+                                if (more_res)
+                                {
+                                    res = 100 + 25 * r;
+                                }
+                                else
+                                {
+                                    if (r != 0)
+                                    {
+                                        res = 125;
+                                    }
+                                    else
+                                    {
+                                        res = 100;
+                                    }
+                                }
+                                pf &= ~PEON_HARVEST_LUMBER;
+                                change_res(o, 1, 1, res);
+                                add_total_res(o, 1, 1, res);
+                                f = true;
+                            }
                         }
                     }
                 }
@@ -3653,8 +3655,7 @@ int goods_into_inventory(int* p)
         return 0;
     }
     else
-    */
-    return ((int(*)(int*))g_proc_00424745)(p);//original
+        return ((int(*)(int*))g_proc_00424745)(p);//original
 }
 
 void sounds_ready_table_set(byte id, WORD snd)
