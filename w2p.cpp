@@ -14,6 +14,7 @@ int captk = 0;//number of units in captured array
 byte ua[255] = { 255 };//attackers array
 byte ut[255] = { 255 };//targets array     only unit ua[i] can deal damage to unit ut[i]
 byte runes[9] = { 0 };//runestone special abilities flags
+bool table = false;//show win/lose table
 bool agr = false;//allied comps aggro if attacked
 bool cpt = false;//can buildings be captured on low hp
 bool pcpt = false;//only peons can capture low hp build
@@ -38,6 +39,8 @@ bool A_transport = false;//transport activated
 bool A_autoheal = false;//paladins autoheal activated
 bool blood_f = false;//blood fixed
 bool more_res = false;//can get more resources
+bool path_fixed = false;//path fix
+bool ai_fixed = false;//ai fix
 byte m_slow_aura[255] = { 255 };//units that have slow aura
 byte m_death_aura[255] = { 255 };//units that have death aura
 byte m_sneak[255] = { 255 };//units that have hide ability
@@ -108,7 +111,7 @@ bool cmp_args2(byte m, WORD v, WORD c)
 }
 
 bool cmp_args4(byte m, int v, int c)
-{//compare 4 bytes (for resources)
+{//comapre 4 bytes (for resources)
     bool f = false;
     switch (m)
     {
@@ -177,6 +180,11 @@ void tile_remove_trees(int x, int y)
 void tile_remove_rocks(int x, int y)
 {
     ((void (*)(int, int))F_TILE_REMOVE_ROCKS)(x, y);
+}
+
+void tile_remove_walls(int x, int y)
+{
+    ((void (*)(int, int))F_TILE_REMOVE_WALLS)(x, y);
 }
 
 bool stat_byte(byte s)
@@ -400,7 +408,7 @@ bool check_unit_near_death(int* p)
 
 void find_all_units(byte id)
 {
-    //CAREFUL with this function - ALL units get into massive 
+	//CAREFUL with this function - ALL units get into massive 
     //even if their memory was cleared already
     //all units by id will go in array
     units = 0;
@@ -410,27 +418,6 @@ void find_all_units(byte id)
     while (k > 0)
     {
         bool f = *((byte*)((uintptr_t)p + S_ID)) == (byte)id;
-        if (id == ANY_BUILDING)
-            f = *((byte*)((uintptr_t)p + S_ID)) >= U_FARM;//buildings
-        if (id == ANY_MEN)
-            f = *((byte*)((uintptr_t)p + S_ID)) < U_FARM;//all nonbuildings
-        if (id == ANY_UNITS)
-            f = true;//all ALL units
-        if (id == ANY_BUILDING_2x2)//small buildings
-        {
-            byte sz = *((byte*)UNIT_SIZE_TABLE + *((byte*)((uintptr_t)p + S_ID)) * 4);
-            f = sz == 2;
-        }
-        if (id == ANY_BUILDING_3x3)//med buildings
-        {
-            byte sz = *((byte*)UNIT_SIZE_TABLE + *((byte*)((uintptr_t)p + S_ID)) * 4);
-            f = sz == 3;
-        }
-        if (id == ANY_BUILDING_4x4)//big buildings
-        {
-            byte sz = *((byte*)UNIT_SIZE_TABLE + *((byte*)((uintptr_t)p + S_ID)) * 4);
-            f = sz == 4;
-        }
         if (f)
         {
             unit[units] = p;
@@ -770,6 +757,117 @@ void sort_attack_can_hit(int* p)
     }
 }
 
+void sort_attack_can_hit_range(int* p)
+{
+    //only units stay in array that *p can attack them and have passable terrain in attack range
+    int k = 0;
+    for (int i = 0; i < units; i++)
+    {
+        int a = 0;
+        a = ((int(*)(int*, int*))F_ATTACK_CAN_HIT)(p, unit[i]);//attack can hit
+        if (a != 0)
+        {
+            byte id = *((byte*)((uintptr_t)unit[i] + S_ID));
+            byte szx = *(byte*)(UNIT_SIZE_TABLE + 4 * id);
+            byte szy = *(byte*)(UNIT_SIZE_TABLE + 4 * id + 2);
+            byte idd = *((byte*)((uintptr_t)p + S_ID));
+            byte rng = *(byte*)(UNIT_RANGE_TABLE + idd);
+            byte ms = *(byte*)MAP_SIZE;
+            byte xx = *((byte*)((uintptr_t)unit[i] + S_X));
+            byte yy = *((byte*)((uintptr_t)unit[i] + S_Y));
+            if (xx < rng)xx = 0;
+            else xx -= rng;
+            if (yy < rng)yy = 0;
+            else yy -= rng;
+            byte cl = *((byte*)((uintptr_t)p + S_MOVEMENT_TYPE));//movement type
+            WORD mt = *(WORD*)(GLOBAL_MOVEMENT_TERRAIN_FLAGS + 2 * cl);//movement terrain flags
+
+            bool f = false;
+            for (int x = xx; (x < szx + xx + rng * 2 + 1) && (x < 127); x++)
+            {
+                for (int y = yy; (y < szy + yy + rng * 2 + 1) && (x < 127); y++)
+                {
+                    int aa = 1;
+                    if ((cl == 0) || (cl == 3))//land and docked transport
+                    {
+                        aa = ((int (*)(int, int, int))F_XY_PASSABLE)(x, y, (int)mt);//original war2 func if terrain passable with that movement type
+                    }
+                    if ((x % 2 == 0) && (y % 2 == 0))//air and water
+                    {
+                        if ((cl == 1) || (cl == 2))
+                        {
+                            aa = ((int (*)(int, int, int))F_XY_PASSABLE)(x, y, (int)mt);
+                        }
+                    }
+                    if (aa == 0)f = true;
+                }
+            }
+            if (f)
+            {
+                unitt[k] = unit[i];
+                k++;
+            }
+        }
+    }
+    units = k;
+    for (int i = 0; i < units; i++)
+    {
+        unit[i] = unitt[i];
+    }
+}
+
+void sort_rune_near()
+{
+    int k = 0;
+    for (int i = 0; i < units; i++)
+    {
+        byte x = *((byte*)((uintptr_t)unit[i] + S_X));
+        byte y = *((byte*)((uintptr_t)unit[i] + S_Y));
+        bool f = false;
+        for (int r = 0; r < 50; r++)//max runes 50
+        {
+            WORD d = *(WORD*)(RUNEMAP_TIMERS + 2 * r);
+            if (d != 0)
+            {
+                byte xx = *(byte*)(RUNEMAP_X + r);
+                byte yy = *(byte*)(RUNEMAP_Y + r);
+                if (xx == x)
+                {
+                    if (yy > y)
+                    {
+                        if ((yy - y) == 1)f = true;
+                    }
+                    else
+                    {
+                        if ((y - yy) == 1)f = true;
+                    }
+                }
+                if (yy == y)
+                {
+                    if (xx > x)
+                    {
+                        if ((xx - x) == 1)f = true;
+                    }
+                    else
+                    {
+                        if ((x - xx) == 1)f = true;
+                    }
+                }
+            }
+        }
+        if (!f)
+        {
+            unitt[k] = unit[i];
+            k++;
+        }
+    }
+    units = k;
+    for (int i = 0; i < units; i++)
+    {
+        unit[i] = unitt[i];
+    }
+}
+
 void set_stat_all(byte pr, int v)
 {
     for (int i = 0; i < units; i++)
@@ -841,7 +939,7 @@ void damag(int* p, byte n)
 {
     //dealt X damage to unit
     WORD hp = *((WORD*)((uintptr_t)p + S_HP));//unit hp
-    if (hp > n)
+    if (hp < n)
     {
         hp -= n;
         set_stat(p, hp, S_HP);
@@ -2506,6 +2604,680 @@ bool devotion_aura(int* trg, byte id)
         return false;
 }
 
+PROC g_proc_00451054;
+void count_add_to_tables_load_game(int* u)
+{
+    if (ai_fixed)
+    {
+        byte f = *((byte*)((uintptr_t)u + S_AI_AIFLAGS));
+        byte ff = f | AI_PASSIVE;
+        set_stat(u, ff, S_AI_AIFLAGS);
+        ((void (*)(int*))g_proc_00451054)(u);//original
+        set_stat(u, f, S_AI_AIFLAGS);
+    }
+    else
+        ((void (*)(int*))g_proc_00451054)(u);//original
+}
+
+PROC g_proc_00438A5C;
+PROC g_proc_00438985;
+void unset_peon_ai_flags(int* u)
+{
+    ((void (*)(int*))g_proc_00438A5C)(u);//original
+    if (ai_fixed)
+    {
+        char rep[] = "\x0\x0";
+        WORD p = 0;
+        for (int i = 0; i < 8; i++)
+        {
+            p = *((WORD*)((uintptr_t)SGW_REPAIR_PEONS + 2 * i));
+            if (p > 1600)
+                PATCH_SET((char*)(SGW_REPAIR_PEONS + 2 * i), rep);
+            p = *((WORD*)((uintptr_t)SGW_GOLD_PEONS + 2 * i));
+            if (p > 1600)
+                PATCH_SET((char*)(SGW_GOLD_PEONS + 2 * i), rep);
+            p = *((WORD*)((uintptr_t)SGW_TREE_PEONS + 2 * i));
+            if (p > 1600)
+                PATCH_SET((char*)(SGW_TREE_PEONS + 2 * i), rep);
+        }
+    }
+}
+
+void tech_built(int p, byte t)
+{
+    ((void (*)(int, byte))F_TECH_BUILT)(p, t);
+}
+
+void tech_reinit()
+{
+    for (int i = 0; i < 8; i++)
+    {
+        byte o = *(byte*)(CONTROLER_TYPE + i);
+        byte a = 0;
+        int s = 0;
+        if (o == C_COMP)
+        {
+            a = *(byte*)(GB_ARROWS + i);
+            if (a > 0)tech_built(i, UP_ARROW1);
+            if (a > 1)tech_built(i, UP_ARROW2);
+            a = *(byte*)(GB_SWORDS + i);
+            if (a > 0)tech_built(i, UP_SWORD1);
+            if (a > 1)tech_built(i, UP_SWORD2);
+            a = *(byte*)(GB_SHIELDS + i);
+            if (a > 0)tech_built(i, UP_SHIELD1);
+            if (a > 1)tech_built(i, UP_SHIELD2);
+            a = *(byte*)(GB_BOAT_ATTACK + i);
+            if (a > 0)tech_built(i, UP_BOATATK1);
+            if (a > 1)tech_built(i, UP_BOATATK2);
+            a = *(byte*)(GB_BOAT_ARMOR + i);
+            if (a > 0)tech_built(i, UP_BOATARM1);
+            if (a > 1)tech_built(i, UP_BOATARM2);
+            a = *(byte*)(GB_CAT_DMG + i);
+            if (a > 0)tech_built(i, UP_CATDMG1);
+            if (a > 1)tech_built(i, UP_CATDMG2);
+            a = *(byte*)(GB_RANGER + i);
+            if (a)tech_built(i, UP_RANGER);
+            a = *(byte*)(GB_MARKS + i);
+            if (a)tech_built(i, UP_SKILL1);
+            a = *(byte*)(GB_LONGBOW + i);
+            if (a)tech_built(i, UP_SKILL2);
+            a = *(byte*)(GB_SCOUTING + i);
+            if (a)tech_built(i, UP_SKILL3);
+
+            s = *(int*)(SPELLS_LEARNED + 4 * i);
+            if (s & (1 << L_ALTAR_UPGR))tech_built(i, UP_CLERIC);
+            if (s & (1 << L_HEAL))tech_built(i, UP_CLERIC1);
+            if (s & (1 << L_BLOOD))tech_built(i, UP_CLERIC1);
+            if (s & (1 << L_EXORCISM))tech_built(i, UP_CLERIC2);
+            if (s & (1 << L_RUNES))tech_built(i, UP_CLERIC2);
+            if (s & (1 << L_FLAME_SHIELD))tech_built(i, UP_WIZARD1);
+            if (s & (1 << L_RAISE))tech_built(i, UP_WIZARD1);
+            if (s & (1 << L_SLOW))tech_built(i, UP_WIZARD2);
+            if (s & (1 << L_HASTE))tech_built(i, UP_WIZARD2);
+            if (s & (1 << L_INVIS))tech_built(i, UP_WIZARD3);
+            if (s & (1 << L_WIND))tech_built(i, UP_WIZARD3);
+            if (s & (1 << L_POLYMORF))tech_built(i, UP_WIZARD4);
+            if (s & (1 << L_UNHOLY))tech_built(i, UP_WIZARD4);
+            if (s & (1 << L_BLIZZARD))tech_built(i, UP_WIZARD5);
+            if (s & (1 << L_DD))tech_built(i, UP_WIZARD5);
+
+            find_all_alive_units(U_KEEP);
+            sort_stat(S_OWNER, i, CMP_EQ);
+            if (units != 0)tech_built(i, UP_KEEP);
+            find_all_alive_units(U_STRONGHOLD);
+            sort_stat(S_OWNER, i, CMP_EQ);
+            if (units != 0)tech_built(i, UP_KEEP);
+            find_all_alive_units(U_CASTLE);
+            sort_stat(S_OWNER, i, CMP_EQ);
+            if (units != 0)
+            {
+                tech_built(i, UP_KEEP);
+                tech_built(i, UP_CASTLE);
+            }
+            find_all_alive_units(U_FORTRESS);
+            sort_stat(S_OWNER, i, CMP_EQ);
+            if (units != 0)
+            {
+                tech_built(i, UP_KEEP);
+                tech_built(i, UP_CASTLE);
+            }
+        }
+    }
+}
+
+void building_start_build(int* u,byte id,byte o)
+{
+    ((void (*)(int*, byte, byte))0x0040E2A0)(u, id, o);
+}
+
+void build_inventor(int* u)
+{
+    if (check_unit_complete(u))
+    {
+        byte f = *((byte*)((uintptr_t)u + S_FLAGS1));
+        if (f & UF_BUILD_ON)
+        {
+            byte id = *((byte*)((uintptr_t)u + S_ID));
+            byte o = *((byte*)((uintptr_t)u + S_OWNER));
+            int spr = get_val(ACTIVE_SAPPERS, o);
+            byte nspr = *(byte*)(0x004AF0E7 + 48 * o);
+            if (nspr > spr)
+            {
+                if (id == U_INVENTOR)building_start_build(u, U_DWARWES, 0);
+                if (id == U_ALCHEMIST)building_start_build(u, U_GOBLINS, 0);
+            }
+            int flr = get_val(ACTIVE_FLYER, o);
+            byte nflr = *(byte*)(0x004AF0E6 + 48 * o);
+            if (nflr > flr)
+            {
+                if (id == U_INVENTOR)building_start_build(u, U_FLYER, 0);
+                if (id == U_ALCHEMIST)building_start_build(u, U_ZEPPELIN, 0);
+            }
+        }
+    }
+}
+
+void build_sap_fix(bool f)
+{
+    if (f)
+    {
+        char b1[] = "\x80\xfa\x40\x0";
+        void (*r1) (int*) = build_inventor;
+        patch_setdword((DWORD*)b1, (DWORD)r1);
+        PATCH_SET((char*)0x00494BC8, b1);//human inv
+        PATCH_SET((char*)(0x00494BC8 + 4), b1);//orc inv
+    }
+    else
+    {
+        char b1[] = "\x80\xfa\x40\x0";
+        PATCH_SET((char*)0x00494BC8, b1);//human inv
+        PATCH_SET((char*)(0x00494BC8 + 4), b1);//orc inv
+    }
+}
+
+void ai_fix_plugin(bool f)
+{
+    if (f)
+    {
+        char b1[] = "\xb2\x02";
+        PATCH_SET((char*)0x00439022, b1);//2 peon rep
+        char b21[] = "\xbb\x8";
+        PATCH_SET((char*)0x004392c0, b21);//gold lumber
+        char b22[] = "\xb4\x4";
+        PATCH_SET((char*)0x004392df, b22);//gold lumber
+        char b3[] = "\x1";
+        PATCH_SET((char*)0x0043A3FF, b3);//packed build
+        char b4[] = "\xbe\x0\x0\x0\x0\x90\x90";
+        PATCH_SET((char*)0x004271E3, b4);//th corner
+        char b5[] = "\x90\x90";
+        PATCH_SET((char*)0x0042626F, b5);//fix dd/bliz
+        char b6[] = "\x90\x90\x90\x90\x90\x90";
+        PATCH_SET((char*)0x004390AD, b6);//powerbuild
+        char b7[] = "\x90\x90\x90\x90";
+        PATCH_SET((char*)0x0040B1AB, b7);//cata afraid
+        char b8[] = "\x70\x79";
+        PATCH_SET((char*)0x0049D934, b8);//ships random patrol
+
+        char m1[] = "\xa9\x0\x0\x0\x4\x74\x16\x8b\x44\x24\xc\x66\x83\x78\x44\x0\x75\xb\x90\x90\x90\x90";
+        PATCH_SET((char*)0x00425C79, m1);//inviz cond
+        char m2[] = "\x90\x90\x90";
+        PATCH_SET((char*)0x0042558E, m2);//no x3 bliz mp
+        PATCH_SET((char*)0x004256CC, m2);//no x3 bliz mp
+        char m3[] = "\x33\xd2\x8a\x50\x27\x3e\x8b\x4\x95\x24\xf5\x4c\x0\xa8\x20\x75\x19\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90";
+        PATCH_SET((char*)0x00425B14, m3);//fire cond
+        char m4[] = "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90";
+        PATCH_SET((char*)0x00425B81, m4);//bliz cond
+        char m5[] = "\x96";
+        PATCH_SET((char*)0x004255D2, m5);//no inv poly > jmp exit
+        char m6[] = "\xe9\x6c\x2\x0\x0";
+        PATCH_SET((char*)0x00425569, m6);//jmp to exit
+        char m7[] = "\x90\x90";
+        PATCH_SET((char*)0x00424F85, m7);//runes no inviz
+
+        build_sap_fix(true);
+
+        ai_fixed = true;
+    }
+    else
+    {
+        char b1[] = "\x8a\xd0";
+        PATCH_SET((char*)0x00439022, b1);//2 peon rep
+        char b21[] = "\xd0\x7";
+        PATCH_SET((char*)0x004392c0, b21);//gold lumber
+        char b22[] = "\xf4\x1";
+        PATCH_SET((char*)0x004392df, b22);//gold lumber
+        char b3[] = "\x6";
+        PATCH_SET((char*)0x0043A3FF, b3);//packed build
+        char b4[] = "\xe8\xf8\x2a\x1\x0\x8b\xf0";
+        PATCH_SET((char*)0x004271E3, b4);//th corner
+        char b5[] = "\x75\x7";
+        PATCH_SET((char*)0x0042626F, b5);//fix dd/bliz
+        char b6[] = "\xf\x84\x78\x1\x0\x0";
+        PATCH_SET((char*)0x004390AD, b6);//powerbuild
+        char b7[] = "\x89\x44\x24\x10";
+        PATCH_SET((char*)0x0040B1AB, b7);//cata afraid
+        char b8[] = "\x10\x7A";
+        PATCH_SET((char*)0x0049D934, b8);//ships random patrol
+
+        char m1[] = "\x80\x7a\x5e\x2\x75\x17\xa9\x0\x0\x2\x0\x75\x9\x80\xb9\xf0\xfe\x4c\x0\x1\x74\x7";
+        PATCH_SET((char*)0x00425C79, m1);//inviz cond
+        char m2[] = "\x8d\x4\x40";
+        PATCH_SET((char*)0x0042558E, m2);//no x3 bliz mp
+        m2[1] = '\x14';
+        PATCH_SET((char*)0x004256CC, m2);//no x3 bliz mp
+        char m3[] = "\x6a\x3\x50\x56\xe8\x3\xff\xff\xff\x83\xc4\xc\x85\xc0\x74\x12\x56\xe8\xe6\xd8\x2\x0\x66\xd1\xe8\x83\xc4\x4\x66\x39\x46\x22\x73\x8";
+        PATCH_SET((char*)0x00425B14, m3);//fire cond
+        char m4[] = "\x6a\x3\x50\x51\xe8\x96\xfe\xff\xff\x83\xc4\xc\x85\xc0\x75\x07";
+        PATCH_SET((char*)0x00425B81, m4);//bliz cond
+        char m5[] = "\xc";
+        PATCH_SET((char*)0x004255D2, m5);//no inv poly > jmp exit
+        char m6[] = "\x90\x90\x90\x90\x90";
+        PATCH_SET((char*)0x00425569, m6);//jmp to exit
+        char m7[] = "\x74\x1d";
+        PATCH_SET((char*)0x00424F85, m7);//runes no inviz
+
+        build_sap_fix(false);
+
+        ai_fixed = false;
+    }
+}
+
+PROC g_proc_0040EEDD;
+void upgrade_tower(int* u, int id, int b)
+{
+    if (ai_fixed)
+    {
+        byte o = *((byte*)((uintptr_t)u + S_OWNER));
+        if (get_val(LUMBERMILL, o) == 0) id += 2;
+        if ((get_val(SMITH, o) != 0) && ((get_val(TOWER, o) % 2) == 0)) id += 2;
+    }
+    ((void (*)(int*, int, int))g_proc_0040EEDD)(u, id, b);//original
+}
+
+PROC g_proc_00442E25;
+void create_skeleton(int x, int y, int id, int o)
+{
+    if (ai_fixed)
+    {
+        unit_create((x / 32) + 1, y / 32, id, o % 256, 1);
+    }
+    else
+        ((void (*)(int, int, int, int))g_proc_00442E25)(x, y, id, o);//original
+}
+
+PROC g_proc_00425D1C;
+int* cast_raise(int* u, int a1, int a2, int a3)
+{
+    if (ai_fixed)
+    {
+        byte o = *((byte*)((uintptr_t)u + S_OWNER));
+        if (((*(byte*)(SPELLS_LEARNED + 4 * o) & (1 << RAISE_DEAD)) != 0))return NULL;
+        byte mp = *((byte*)((uintptr_t)u + S_MANA));
+        byte cost = *(byte*)(MANACOST + 2 * RAISE_DEAD);
+        if (mp < cost)return NULL;
+        byte x = *((byte*)((uintptr_t)u + S_X));
+        byte y = *((byte*)((uintptr_t)u + S_Y));
+        set_region((int)x - 8, (int)y - 8, (int)x + 8, (int)y + 8);//set region around myself
+        find_all_units(ANY_BUILDING);//dead body
+        sort_in_region();
+        sort_hidden();
+        sort_near_death();
+        if (units != 0)
+        {
+            byte xx = *((byte*)((uintptr_t)unit[0] + S_X));
+            byte yy = *((byte*)((uintptr_t)unit[0] + S_Y));
+            give_order(u, xx, yy, ORDER_SPELL_RAISEDEAD);
+            return unit[0];
+        }
+        return NULL;
+    }
+    else
+        return ((int* (*)(int*, int, int, int))g_proc_00425D1C)(u, a1, a2, a3);//original
+}
+
+PROC g_proc_00424F94;
+PROC g_proc_00424FD7;
+int* cast_runes(int* u, int a1, int a2, int a3)
+{
+    if (ai_fixed)
+    {
+        byte o = *((byte*)((uintptr_t)u + S_OWNER));
+        if (((*(byte*)(SPELLS_LEARNED + 4 * o) & (1 << RUNES)) != 0))return NULL;
+        byte mp = *((byte*)((uintptr_t)u + S_MANA));
+        byte cost = *(byte*)(MANACOST + 2 * RUNES);
+        if (mp < cost)return NULL;
+        byte x = *((byte*)((uintptr_t)u + S_X));
+        byte y = *((byte*)((uintptr_t)u + S_Y));
+        set_region((int)x - 14, (int)y - 14, (int)x + 14, (int)y + 14);//set region around myself
+        find_all_alive_units(ANY_MEN);
+        sort_in_region();
+        sort_hidden();
+        sort_stat(S_MOVEMENT_TYPE, MOV_LAND, CMP_EQ);
+        for (int ui = 0; ui < 16; ui++)
+        {
+            if (check_ally(o, ui))//only not allied units
+                sort_stat(S_OWNER, ui, CMP_NEQ);
+        }
+        sort_rune_near();
+        if (units != 0)
+        {
+            byte xx = *((byte*)((uintptr_t)unit[0] + S_X));
+            byte yy = *((byte*)((uintptr_t)unit[0] + S_Y));
+            give_order(u, xx, yy, ORDER_SPELL_RUNES);
+            return unit[0];
+        }
+        return NULL;
+    }
+    else
+        return ((int* (*)(int*, int, int, int))g_proc_00424F94)(u, a1, a2, a3);//original
+}
+
+PROC g_proc_0042757E;
+int ai_spell(int* u)
+{
+    if (ai_fixed)
+    {
+        byte id = *((byte*)((uintptr_t)u + S_ID));
+        if ((id == U_MAGE) || (id = U_DK))
+        {
+            byte x = *((byte*)((uintptr_t)u + S_X));
+            byte y = *((byte*)((uintptr_t)u + S_Y));
+            set_region((int)x - 30, (int)y - 30, (int)x + 30, (int)y + 30);//set region around myself
+            find_all_alive_units(ANY_UNITS);
+            sort_in_region();
+            byte o = *((byte*)((uintptr_t)u + S_OWNER));
+            for (int ui = 0; ui < 16; ui++)
+            {
+                if (check_ally(o, ui))
+                    sort_stat(S_OWNER, ui, CMP_NEQ);
+            }
+            if (units != 0)
+                return ((int (*)(int*))g_proc_0042757E)(u);//original
+        }
+        else
+            return ((int (*)(int*))g_proc_0042757E)(u);//original
+        return 0;
+    }
+    else
+        return ((int (*)(int*))g_proc_0042757E)(u);//original
+}
+
+PROC g_proc_00427FAE;
+void ai_attack(int* u, int b, int a)
+{
+    if (ai_fixed)
+    {
+        byte o = *((byte*)((uintptr_t)u + S_OWNER));
+        for (int i = 0; i < 16; i++)
+        {
+            int* p = (int*)(UNITS_LISTS + 4 * i);
+            if (p)
+            {
+                p = (int*)(*p);
+                while (p)
+                {
+                    bool f = ((*((byte*)((uintptr_t)p + S_ID)) == U_MAGE) || (*((byte*)((uintptr_t)p + S_ID)) == U_DK));
+                    if (f)
+                    {
+                        if (!check_unit_dead(p) && !check_unit_hidden(p))
+                        {
+                            byte ow = *((byte*)((uintptr_t)p + S_OWNER));
+                            if ((*(byte*)(CONTROLER_TYPE + o) == C_COMP))
+                            {
+                                WORD inv = *((WORD*)((uintptr_t)p + S_INVIZ));
+                                if (inv == 0)
+                                {
+                                    byte aor = *((byte*)((uintptr_t)p + 94));
+                                    if (aor != 2)
+                                    {
+                                        byte x = *((byte*)((uintptr_t)u + S_X));
+                                        byte y = *((byte*)((uintptr_t)u + S_Y));
+                                        set_region((int)x - 30, (int)y - 30, (int)x + 30, (int)y + 30);//set region around myself
+                                        find_all_alive_units(ANY_UNITS);
+                                        sort_in_region();
+                                        for (int ui = 0; ui < 16; ui++)
+                                        {
+                                            if (check_ally(ow, ui))
+                                                sort_stat(S_OWNER, ui, CMP_NEQ);
+                                        }
+                                        if (units == 0)
+                                            ((void (*)(int*, int, int))F_ICE_SET_AI_ORDER)(p, AI_ORDER_ATTACK, a);//ai attack
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    p = (int*)(*((int*)((uintptr_t)p + S_NEXT_UNIT_POINTER)));
+                }
+            }
+        }
+
+        find_all_alive_units(ANY_MEN);
+        sort_stat(S_ID, U_DWARWES, CMP_BIGGER_EQ);
+        sort_stat(S_ID, U_GOBLINS, CMP_SMALLER_EQ);
+        sort_stat(S_OWNER, o, CMP_EQ);
+        sort_stat(S_AI_ORDER, AI_ORDER_ATTACK, CMP_NEQ);//not attack already
+        for (int i = 0; i < units; i++)
+        {
+            ((void (*)(int*, int, int))F_ICE_SET_AI_ORDER)(unit[i], AI_ORDER_ATTACK, a);//ai attack
+        }
+    }
+    ((void (*)(int*, int, int))g_proc_00427FAE)(u, b, a);//original
+}
+
+void sap_behaviour()
+{
+    for (int i = 0; i < 16; i++)
+    {
+        int* p = (int*)(UNITS_LISTS + 4 * i);
+        if (p)
+        {
+            p = (int*)(*p);
+            while (p)
+            {
+                bool f = ((*((byte*)((uintptr_t)p + S_ID)) == U_DWARWES) || (*((byte*)((uintptr_t)p + S_ID)) == U_GOBLINS));
+                if (f)
+                {
+                    if (!check_unit_dead(p) && !check_unit_hidden(p))
+                    {
+                        byte o = *((byte*)((uintptr_t)p + S_OWNER));
+                        if ((*(byte*)(CONTROLER_TYPE + o) == C_COMP))
+                        {
+                            byte ord = *((byte*)((uintptr_t)p + S_ORDER));
+                            byte x = *((byte*)((uintptr_t)p + S_X));
+                            byte y = *((byte*)((uintptr_t)p + S_Y));
+                            if ((ord != ORDER_DEMOLISH) && (ord != ORDER_DEMOLISH_NEAR) && (ord != ORDER_DEMOLISH_AT))
+                            {
+                                set_region((int)x - 12, (int)y - 12, (int)x + 12, (int)y + 12);//set region around myself
+                                find_all_alive_units(ANY_UNITS);
+                                sort_in_region();
+                                sort_stat(S_MOVEMENT_TYPE, MOV_LAND, CMP_EQ);
+                                for (int ui = 0; ui < 16; ui++)
+                                {
+                                    if (check_ally(o, ui))//only not allied units
+                                        sort_stat(S_OWNER, ui, CMP_NEQ);
+                                }
+                                if (units != 0)
+                                {
+                                    int ord = *(int*)(ORDER_FUNCTIONS + 4 * ORDER_DEMOLISH);
+                                    ((void (*)(int*, int, int, int*, int))F_GIVE_ORDER)(p, 0, 0, unit[0], ord);
+                                }
+                                set_region((int)x - 5, (int)y - 5, (int)x + 5, (int)y + 5);//set region around myself
+                                find_all_alive_units(ANY_UNITS);
+                                sort_in_region();
+                                sort_stat(S_MOVEMENT_TYPE, MOV_LAND, CMP_EQ);
+                                for (int ui = 0; ui < 16; ui++)
+                                {
+                                    if (check_ally(o, ui))//only not allied units
+                                        sort_stat(S_OWNER, ui, CMP_NEQ);
+                                }
+                                if (units != 0)
+                                {
+                                    int ord = *(int*)(ORDER_FUNCTIONS + 4 * ORDER_DEMOLISH);
+                                    ((void (*)(int*, int, int, int*, int))F_GIVE_ORDER)(p, 0, 0, unit[0], ord);
+                                }
+                                set_region((int)x - 1, (int)y - 1, (int)x + 1, (int)y + 1);//set region around myself
+                                find_all_alive_units(ANY_UNITS);
+                                sort_in_region();
+                                sort_stat(S_MOVEMENT_TYPE, MOV_LAND, CMP_EQ);
+                                for (int ui = 0; ui < 16; ui++)
+                                {
+                                    if (check_ally(o, ui))//only not allied units
+                                        sort_stat(S_OWNER, ui, CMP_NEQ);
+                                }
+                                if (units != 0)
+                                {
+                                    int ord = *(int*)(ORDER_FUNCTIONS + 4 * ORDER_DEMOLISH);
+                                    ((void (*)(int*, int, int, int*, int))F_GIVE_ORDER)(p, 0, 0, unit[0], ord);
+                                }
+                            }
+                        }
+                    }
+                }
+                p = (int*)(*((int*)((uintptr_t)p + S_NEXT_UNIT_POINTER)));
+            }
+        }
+    }
+}
+
+void unstuk()
+{
+    for (int i = 0; i < 16; i++)
+    {
+        int* p = (int*)(UNITS_LISTS + 4 * i);
+        if (p)
+        {
+            p = (int*)(*p);
+            while (p)
+            {
+                byte id = *((byte*)((uintptr_t)p + S_ID));
+                byte ord = *((byte*)((uintptr_t)p + S_ORDER));
+                byte aord = *((byte*)((uintptr_t)p + 94));
+                bool f = ((((id < U_CRITTER))
+                    && !check_unit_preplaced(p) && (ord == ORDER_STOP) && (aord == 2)) ||
+                    ((id == U_PEASANT) || (id == U_PEON)));
+                if (f)
+                {
+                    if (!check_unit_dead(p) && !check_unit_hidden(p))
+                    {
+                        byte o = *((byte*)((uintptr_t)p + S_OWNER));
+                        if ((*(byte*)(CONTROLER_TYPE + o) == C_COMP))
+                        {
+                            byte st = *((byte*)((uintptr_t)p + S_NEXT_FIRE));
+                            byte frm = *((byte*)((uintptr_t)p + S_FRAME));
+                            byte pfrm = *((byte*)((uintptr_t)p + S_NEXT_FIRE + 1));
+                            if (st == 0)
+                            {
+                                byte map = *(byte*)MAP_SIZE - 1;
+                                byte x = *((byte*)((uintptr_t)p + S_X));
+                                byte y = *((byte*)((uintptr_t)p + S_Y));
+                                int xx = 0, yy = 0, dir = 0;
+                                xx += x;
+                                yy += y;
+                                dir = ((int (*)())F_NET_RANDOM)();
+                                dir %= 8;
+                                if (dir == 0)
+                                {
+                                    if (yy > 0)yy -= 1;
+                                }
+                                if (dir == 1)
+                                {
+                                    if (yy > 0)yy -= 1;
+                                    if (xx < map)xx += 1;
+                                }
+                                if (dir == 2)
+                                {
+                                    if (xx < map)xx += 1;
+                                }
+                                if (dir == 3)
+                                {
+                                    if (xx < map)xx += 1;
+                                    if (yy < map)yy += 1;
+                                }
+                                if (dir == 4)
+                                {
+                                    if (yy < map)yy += 1;
+                                }
+                                if (dir == 5)
+                                {
+                                    if (yy < map)yy += 1;
+                                    if (xx > 0)xx -= 1;
+                                }
+                                if (dir == 6)
+                                {
+                                    if (xx > 0)xx -= 1;
+                                }
+                                if (dir == 7)
+                                {
+                                    if (xx > 0)xx -= 1;
+                                    if (yy > 0)yy -= 1;
+                                }
+                                if ((id != U_PEON) && (id != U_PEASANT))
+                                {
+                                    int* trg = NULL;
+                                    find_all_alive_units(ANY_UNITS);
+                                    sort_hidden();
+                                    byte mv = *((byte*)((uintptr_t)p + S_MOVEMENT_TYPE));
+                                    if (mv == MOV_LAND)
+                                        sort_stat(S_MOVEMENT_TYPE, MOV_LAND, CMP_EQ);
+                                    sort_attack_can_hit_range(p);
+                                    for (int ui = 0; ui < 16; ui++)
+                                    {
+                                        if (check_ally(o, ui))//only not allied units
+                                            sort_stat(S_OWNER, ui, CMP_NEQ);
+                                    }
+                                    if (units == 0)
+                                    {
+                                        find_all_alive_units(ANY_UNITS);
+                                        sort_hidden();
+                                        byte mv = *((byte*)((uintptr_t)p + S_MOVEMENT_TYPE));
+                                        sort_attack_can_hit_range(p);
+                                        for (int ui = 0; ui < 16; ui++)
+                                        {
+                                            if (check_ally(o, ui))//only not allied units
+                                                sort_stat(S_OWNER, ui, CMP_NEQ);
+                                        }
+                                    }
+                                    if (units != 0)
+                                    {
+                                        WORD dist = 0xFFFF;
+                                        int ndu = -1;
+                                        for (int j = 0; j < units; j++)
+                                        {
+                                            struct GPOINT
+                                            {
+                                                WORD x;
+                                                WORD y;
+                                            };
+                                            GPOINT l;
+                                            l.x = *((WORD*)((uintptr_t)p + S_X));
+                                            l.y = *((WORD*)((uintptr_t)p + S_Y));
+                                            WORD dst = 0;
+                                            dst = ((WORD(*)(GPOINT*, int*))F_MTX_DIST)(&l, unit[j]);//mtx dist
+                                            if (dst < dist)
+                                            {
+                                                dist = dst;
+                                                ndu = j;
+                                            }
+                                        }
+                                        if (ndu != -1)trg = unit[ndu];
+                                    }
+                                    if (trg)
+                                    {
+                                        struct GPOINT
+                                        {
+                                            WORD x;
+                                            WORD y;
+                                        };
+                                        GPOINT l;
+                                        l.x = *((WORD*)((uintptr_t)trg + S_X));
+                                        l.y = *((WORD*)((uintptr_t)trg + S_Y));
+                                        units = 1;
+                                        unit[0] = trg;
+                                        sort_attack_can_hit_range(p);
+                                        int sa = 0;
+                                        if (units != 0)
+                                            sa = ((int (*)(int*, int, GPOINT*))F_ICE_SET_AI_ORDER)(p, 2, &l);
+                                        if (sa)give_order(p, xx % 256, yy % 256, ORDER_ATTACK_AREA);
+                                    }
+                                }
+                                else
+                                    give_order(p, xx % 256, yy % 256, ORDER_MOVE);
+                                st = 10;
+                            }
+                            if (st > 0)st -= 1;
+                            if (frm != pfrm)st = 255;
+                            set_stat(p, st, S_NEXT_FIRE);
+                            set_stat(p, frm, S_NEXT_FIRE + 1);
+                        }
+                    }
+                }
+                p = (int*)(*((int*)((uintptr_t)p + S_NEXT_UNIT_POINTER)));
+            }
+        }
+    }
+}
+
 void unit_timer()
 {
     //timer for transport and runestone heal
@@ -2552,6 +3324,12 @@ void update_spells()
             sneak(m_sneak[i]);
         else
             i = 256;
+    }
+	if (ai_fixed)
+    {
+		tech_reinit();
+		sap_behaviour();
+		unstuk();
     }
     //PLACE your new functions here
     
@@ -2903,6 +3681,19 @@ int* bld_unit_create(int a1, int a2, int a3, byte a4, int* a5)
                 set_stat(u, y, S_RETARGET_Y1);
                 set_stat(u, o, S_RETARGET_ORDER);
             }
+            if (ai_fixed)
+            {
+				byte o = *((byte*)((uintptr_t)u + S_OWNER));
+				byte m = *((byte*)((uintptr_t)u + S_MANA));
+				if ((*(byte*)(CONTROLER_TYPE + o) == C_COMP))
+				{
+					if (m = 0x55)//85 default starting mana
+					{
+						char buf[] = "\xA0";//160
+                        PATCH_SET((char*)u + S_MANA, buf);
+                    }
+                }
+            }
         }
     }
     return u;
@@ -2966,8 +3757,6 @@ int* tower_find_attacker(int* p)
 PROC g_proc_00451728;
 void unit_kill_deselect(int* u)
 {
-    //hooked function that make tower forgot target that died
-    //cause if not forgot then will be many bugs
     int* ud = u;
     ((void (*)(int*))g_proc_00451728)(u);//original
     for (int i = 0; i < 16; i++)
@@ -2981,6 +3770,7 @@ void unit_kill_deselect(int* u)
                 byte id = *((byte*)((uintptr_t)p + S_ID));
                 bool f = ((id == U_HARROWTOWER) || (id == U_OARROWTOWER)
                     || (id == U_HCANONTOWER) || (id == U_OCANONTOWER));
+                bool f2 = ((id == U_DWARWES) || (id == U_GOBLINS));
                 if (f)
                 {
                     if (!check_unit_dead(p) && check_unit_complete(p))
@@ -2999,9 +3789,87 @@ void unit_kill_deselect(int* u)
                         }
                     }
                 }
+                if (f2)
+                {
+                    if (ai_fixed)
+                    {
+                        if (!check_unit_dead(p))
+                        {
+                            byte a1 = *((byte*)((uintptr_t)p + S_ORDER_UNIT_POINTER));
+                            byte a2 = *((byte*)((uintptr_t)p + S_ORDER_UNIT_POINTER + 1));
+                            byte a3 = *((byte*)((uintptr_t)p + S_ORDER_UNIT_POINTER + 2));
+                            byte a4 = *((byte*)((uintptr_t)p + S_ORDER_UNIT_POINTER + 3));
+                            int* tr = (int*)(a1 + 256 * a2 + 256 * 256 * a3 + 256 * 256 * 256 * a4);
+                            if (tr == ud)
+                            {
+                                set_stat(p, 0, S_ORDER_UNIT_POINTER);
+                                set_stat(p, 0, S_ORDER_UNIT_POINTER + 1);
+                                set_stat(p, 0, S_ORDER_UNIT_POINTER + 2);
+                                set_stat(p, 0, S_ORDER_UNIT_POINTER + 3);
+                                give_order(p, 0, 0, ORDER_STOP);
+                            }
+                        }
+                    }
+                }
                 p = (int*)(*((int*)((uintptr_t)p + S_NEXT_UNIT_POINTER)));
             }
         }
+    }
+}
+
+void multicast_fix(bool f)
+{
+    if (f)
+    {
+        char rep[] = "\xeb";
+        PATCH_SET((char*)MULTICAST_FIX, rep);
+    }
+    else
+    {
+        char rep[] = "\x74";
+        PATCH_SET((char*)MULTICAST_FIX, rep);
+    }
+}
+
+PROC g_proc_0044FF20;
+PROC g_proc_0044FFE6;
+int pathfind_mov(int* um, int s)
+{
+    if (path_fixed)
+    {
+        byte x = *((byte*)((uintptr_t)um + S_X - S_MOV_PATH01 + 1));
+        byte y = *((byte*)((uintptr_t)um + S_Y - S_MOV_PATH01 + 1));
+        byte ox = *((byte*)((uintptr_t)um + S_ORDER_X - S_MOV_PATH01 + 1));
+        byte oy = *((byte*)((uintptr_t)um + S_ORDER_Y - S_MOV_PATH01 + 1));
+        byte xx = abs(x - ox);
+        byte yy = abs(y - oy);
+        byte ss = ((xx < yy) ? xx : yy);
+        if (ss <= 8)s = 1;
+    }
+    return ((int (*)(int*, int))g_proc_0044FF20)(um, s);//original
+}
+
+void pathfind_fix(bool f)
+{
+    if (f)
+    {
+        char rep[] = "\x1";//cheap path
+        PATCH_SET((char*)0x0044FF2C, rep);
+        char rep2[] = "\xeb\x41\x90";
+        PATCH_SET((char*)0x00450306, rep2);
+        char rep3[] = "\x66\x81\xf9\x0\x4\xeb\xb8";//1024 buffer
+        PATCH_SET((char*)0x00450349, rep3);
+        path_fixed = true;
+    }
+    else
+    {
+        char rep[] = "\x7";
+        PATCH_SET((char*)0x0044FF2C, rep);
+        char rep2[] = "\x83\xf9\x32";
+        PATCH_SET((char*)0x00450306, rep2);
+        char rep3[] = "\x90\x90\x90\x90\x90\x90\x90";
+        PATCH_SET((char*)0x00450349, rep3);
+        path_fixed = false;
     }
 }
 
@@ -3537,7 +4405,7 @@ PROC g_proc_004529C0;//grow struct
 int goods_into_inventory(int* p)
 {
 //use this function if you need to change amount of res peon or tanker bring back
-    if (replaced)
+    if (TRUE)
     {
         int tr = (*(int*)((uintptr_t)p + S_ORDER_UNIT_POINTER));
         if (tr != 0)
@@ -4200,6 +5068,8 @@ void replace_def()
     A_autoheal = false;
     blood_f = false;
     more_res = false;
+	path_fixed = false;
+    ai_fixed = false;
 }
 
 void replace_common()
@@ -4291,6 +5161,9 @@ void replace_back()
     brclik(false);
     rc_jmp(false);
     autoheal(false);
+	multicast_fix(false);
+    pathfind_fix(false);
+	ai_fix_plugin(false);
 }
 
 void replace_trigger()
@@ -4298,6 +5171,10 @@ void replace_trigger()
     replace_back();
     replace_def();
     replace_common();
+	
+	//ai_fix_plugin(true);//UNCOMMENT THIS if you want to enable AI FIX
+    
+	//pathfind_fix(true);//UNCOMMENT THIS if you want to enable PATHFINDING FIX
 
     //replace original victory trigger
     char trig_jmp[] = "\x74\x1A";//74 0F
@@ -4353,8 +5230,20 @@ void common_hooks()
     hook(0x0043ABAB, &g_proc_0043ABAB, (char*)placebox_query);
     hook(0x00424745, &g_proc_00424745, (char*)goods_into_inventory);
     hook(0x004529C0, &g_proc_004529C0, (char*)goods_into_inventory);
-
-    hook(0x0042A4A1, &g_proc_0042A4A1, (char*)new_game);
+	
+	hook(0x00451054, &g_proc_00451054, (char*)count_add_to_tables_load_game);
+    hook(0x00438A5C, &g_proc_00438A5C, (char*)unset_peon_ai_flags);
+    hook(0x00438985, &g_proc_00438985, (char*)unset_peon_ai_flags);
+	
+	hook(0x0040EEDD, &g_proc_0040EEDD, (char*)upgrade_tower);
+    hook(0x00442E25, &g_proc_00442E25, (char*)create_skeleton);
+    hook(0x00425D1C, &g_proc_00425D1C, (char*)cast_raise);
+    hook(0x00424F94, &g_proc_00424F94, (char*)cast_runes);
+    hook(0x00424FD7, &g_proc_00424FD7, (char*)cast_runes);
+    hook(0x0042757E, &g_proc_0042757E, (char*)ai_spell);
+    hook(0x00427FAE, &g_proc_00427FAE, (char*)ai_attack);
+	
+	hook(0x0042A4A1, &g_proc_0042A4A1, (char*)new_game);
 }
 
 extern "C" __declspec(dllexport) void w2p_init()

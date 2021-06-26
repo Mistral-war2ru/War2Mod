@@ -54,6 +54,34 @@
 #define PLAYER15 14
 #define P_NEUTRAL 15
 
+//AI upgrades ids
+#define	UP_ARROW1 0x80
+#define	UP_ARROW2 0x81
+#define	UP_RANGER 0x82
+#define	UP_SKILL1 0x83
+#define	UP_SKILL2 0x84
+#define	UP_SKILL3 0x85
+#define	UP_SWORD1 0x86
+#define	UP_SWORD2 0x87
+#define	UP_SHIELD1 0x88
+#define	UP_SHIELD2 0x89
+#define	UP_CATDMG1 0x8A
+#define	UP_CATDMG2 0x8B
+#define	UP_BOATATK1 0x8C
+#define	UP_BOATATK2 0x8D
+#define	UP_BOATARM1 0x8E
+#define	UP_BOATARM2 0x8F
+#define	UP_CLERIC 0x90
+#define	UP_CLERIC1 0x91
+#define	UP_CLERIC2 0x92
+#define	UP_WIZARD1 0x93
+#define	UP_WIZARD2 0x94
+#define	UP_WIZARD3 0x95
+#define	UP_WIZARD4 0x96
+#define	UP_WIZARD5 0x97
+#define	UP_KEEP 0x98
+#define	UP_CASTLE 0x99
+
 //units
 #define U_FOOTMAN 0
 #define U_GRUNT 1
@@ -160,12 +188,12 @@
 #define U_RUNESTONE 102
 #define U_HWALL 103
 #define U_OWALL 104
-#define ANY_BUILDING 105//actually dead body
-#define ANY_MEN 106//actually dead building 1x1
-#define ANY_UNITS 107//actually dead building 2x2
-#define ANY_BUILDING_2x2 108//actually dead building 3x3
-#define ANY_BUILDING_3x3 109//actually dead building 4x4
-#define ANY_BUILDING_4x4 110//actually not unit
+#define ANY_BUILDING 105//dead body
+#define ANY_MEN 106//dead building 1x1
+#define ANY_UNITS 107//dead building 2x2
+#define ANY_BUILDING_2x2 108//dead building 3x3
+#define ANY_BUILDING_3x3 109//dead building 4x4
+#define ANY_BUILDING_4x4 110//not unit
 
 //bullets and effects
 #define B_LIGHTNING 0
@@ -211,7 +239,7 @@
 #define SS_BLIZZARD 8
 #define SS_INVIZ 9
 #define SS_EYE 10
-#define SS_POLYMORPH 11
+#define SS_POLYMOPH 11
 #define SS_SLOW 12
 #define SS_THUNDER 13
 #define SS_THDARK 14
@@ -320,37 +348,34 @@
 #define L_ALTAR_UPGR 20
 
 //unit stats
-#define S_DRAW_X 0//2 bytes
-#define S_DRAW_Y 2//2 bytes
-#define S_SEQ 4//2 bytes?
+#define S_DRAW_X 0
+#define S_DRAW_Y 2
+#define S_SEQ 4
 #define S_SEQ_FLAG 6
 #define S_ANIMATION_TIMER 7
 #define S_ANIMATION 8
 
-	#define ANIM_DEAD 0
-	#define ANIM_DIE 1
-	#define ANIM_STOP 2
-	#define ANIM_MOVE 3
-	#define ANIM_ATTACK 4
-	#define ANIM_BUILD 5
-	#define ANIM_TRANSPORT_SHORE 6
+#define ANIM_DEAD 0
+#define ANIM_DIE 1
+#define ANIM_STOP 2
+#define ANIM_MOVE 3
+#define ANIM_ATTACK 4
+#define ANIM_BUILD 5
+#define ANIM_TRANSPORT_SHORE 6
 
 #define S_FRAME 9
 #define S_FACE 10
-
-	#define FACE_N 0
-	#define FACE_NE 1
-	#define FACE_E 2
-	#define FACE_SE 3
-	#define FACE_S 4
-	#define FACE_SW 5
-	#define FACE_W 6
-	#define FACE_NW 7
-
-//14 unknown sequence bytes
-
-#define S_X 24//2 bytes
-#define S_Y 26//2 bytes
+#define FACE_N 0
+#define FACE_NE 1
+#define FACE_E 2
+#define FACE_SE 3
+#define FACE_S 4
+#define FACE_SW 5
+#define FACE_W 6
+#define FACE_NW 7
+//14 sequence bytes
+#define S_X 24
+#define S_Y 26
 
 #define S_FLAGS1 28
 	#define UF_EVEN_ALIGN 0x0002//Unit should be even matrix
@@ -385,8 +410,7 @@
 
 #define S_AIFLAGS1 32
 #define S_AIFLAGS2 33
-
-#define S_HP 34//2 bytes
+#define S_HP 34
 #define S_SOUND_COUNTER 36
 #define S_COMMANDS 37
 #define S_MANA 38
@@ -394,10 +418,10 @@
 //40 41 vision mask
 #define S_MOVEMENT_TYPE 42
 
-	#define MOV_LAND 0
-	#define MOV_AIR 1
-	#define MOV_WATER 2
-	#define MOV_SHORE 3
+#define MOV_LAND 0
+#define MOV_AIR 1
+#define MOV_WATER 2
+#define MOV_SHORE 3
 
 #define S_SPRITE 43
 #define S_OWNER 44
@@ -405,76 +429,76 @@
 #define S_ORDER 46
 #define S_NEXT_ORDER 47
 
-	#define ORDER_DEAD 0
-	#define ORDER_DIE 1
-	#define ORDER_STOP 2
-	#define ORDER_MOVE 3
-	#define ORDER_MOVE_PATROL 4
-	#define ORDER_PATROL 5
-	#define ORDER_FOLLOW 6
-	#define ORDER_FOLLOW_GUARD 7
-	#define ORDER_ATTACK 8
-	#define ORDER_ATTACK_TARGET 9
-	#define ORDER_ATTACK_AREA 10
-	#define ORDER_ATTACK_WALL 11
-	#define ORDER_DEFEND 12
-	#define ORDER_STAND 13
-	#define ORDER_STAND_ATTACK 14
-	#define ORDER_DEFEND_GROUND 15
-	#define ORDER_DEFEND_STOPPED 16
-	#define ORDER_ATTACK_GROUND 17
-	#define ORDER_ATTACK_GROUND_MOVE 18
-	#define ORDER_DEMOLISH 19
-	#define ORDER_DEMOLISH_NEAR 20
-	#define ORDER_DEMOLISH_AT 21
-	#define ORDER_PEON_BUILD 22
-	#define ORDER_HARVEST 23
-	#define ORDER_RETURN 24
-	#define ORDER_ENTER 25
-	#define ORDER_LEAVE 26
-	#define ORDER_REPAIR 27
-	#define ORDER_CREATE_BLDG 28
-	#define ORDER_UNLOAD_ALL 29
-	#define ORDER_DOCK 30
-	#define ORDER_UNDOCK 31
-	#define ORDER_WAIT 32
-	#define ORDER_BLDG_WAIT 33
-	#define ORDER_ENTER_TRANSPORT 34
-	#define ORDER_LEAVE_TRANSPORT 35
-	#define ORDER_TRAVELING 36
-	#define ORDER_BLDG_BUILD 37
-	#define ORDER_SPELL_VISION 38
-	#define ORDER_SPELL_HEAL 39
-	#define ORDER_SPELL_AREAHEAL 40
-	#define ORDER_SPELL_EXORCISM 41
-	#define ORDER_SPELL_FIRESHIELD 42
-	#define ORDER_SPELL_FIREBALL 43
-	#define ORDER_SPELL_SLOW 44
-	#define ORDER_SPELL_INVIS 45
-	#define ORDER_SPELL_POLYMORPH 46
-	#define ORDER_SPELL_BLIZZARD 47
-	#define ORDER_SPELL_EYE 48
-	#define ORDER_SPELL_BLOODLUST 49
-	#define ORDER_SPELL_RAISEDEAD 50
-	#define ORDER_SPELL_DRAINLIFE 51
-	#define ORDER_SPELL_WHIRLWIND 52
-	#define ORDER_SPELL_HASTE 53
-	#define ORDER_SPELL_ARMOR 54
-	#define ORDER_SPELL_RUNES 55
-	#define ORDER_SPELL_ROT 56
-	#define ORDER_RESURRECT 57
-	#define ORDER_WAIT_CONVERT 58
-	#define ORDER_VICTORY_CIRCLE 59
-	#define ORDER_NONE 60
+#define ORDER_DEAD 0
+#define ORDER_DIE 1
+#define ORDER_STOP 2
+#define ORDER_MOVE 3
+#define ORDER_MOVE_PATROL 4
+#define ORDER_PATROL 5
+#define ORDER_FOLLOW 6
+#define ORDER_FOLLOW_GUARD 7
+#define ORDER_ATTACK 8
+#define ORDER_ATTACK_TARGET 9
+#define ORDER_ATTACK_AREA 10
+#define ORDER_ATTACK_WALL 11
+#define ORDER_DEFEND 12
+#define ORDER_STAND 13
+#define ORDER_STAND_ATTACK 14
+#define ORDER_DEFEND_GROUND 15
+#define ORDER_DEFEND_STOPPED 16
+#define ORDER_ATTACK_GROUND 17
+#define ORDER_ATTACK_GROUND_MOVE 18
+#define ORDER_DEMOLISH 19
+#define ORDER_DEMOLISH_NEAR 20
+#define ORDER_DEMOLISH_AT 21
+#define ORDER_PEON_BUILD 22
+#define ORDER_HARVEST 23
+#define ORDER_RETURN 24
+#define ORDER_ENTER 25
+#define ORDER_LEAVE 26
+#define ORDER_REPAIR 27
+#define ORDER_CREATE_BLDG 28
+#define ORDER_UNLOAD_ALL 29
+#define ORDER_DOCK 30
+#define ORDER_UNDOCK 31
+#define ORDER_WAIT 32
+#define ORDER_BLDG_WAIT 33
+#define ORDER_ENTER_TRANSPORT 34
+#define ORDER_LEAVE_TRANSPORT 35
+#define ORDER_TRAVELING 36
+#define ORDER_BLDG_BUILD 37
+#define ORDER_SPELL_VISION 38
+#define ORDER_SPELL_HEAL 39
+#define ORDER_SPELL_AREAHEAL 40
+#define ORDER_SPELL_EXORCISM 41
+#define ORDER_SPELL_FIRESHIELD 42
+#define ORDER_SPELL_FIREBALL 43
+#define ORDER_SPELL_SLOW 44
+#define ORDER_SPELL_INVIS 45
+#define ORDER_SPELL_POLYMORPH 46
+#define ORDER_SPELL_BLIZZARD 47
+#define ORDER_SPELL_EYE 48
+#define ORDER_SPELL_BLOODLUST 49
+#define ORDER_SPELL_RAISEDEAD 50
+#define ORDER_SPELL_DRAINLIFE 51
+#define ORDER_SPELL_WHIRLWIND 52
+#define ORDER_SPELL_HASTE 53
+#define ORDER_SPELL_ARMOR 54
+#define ORDER_SPELL_RUNES 55
+#define ORDER_SPELL_ROT 56
+#define ORDER_RESURRECT 57
+#define ORDER_WAIT_CONVERT 58
+#define ORDER_VICTORY_CIRCLE 59
+#define ORDER_NONE 60
 
 #define S_MOV_PATH01 49
 //20 movement path bytes
 
-#define S_INVIZ 68//2 bytes
-#define S_SHIELD 70//2 bytes
-#define S_BLOOD 72//2 bytes
-#define S_HASTE 74//2 bytes
-#define S_AI_SPELLS 76//2 bytes
+#define S_INVIZ 68
+#define S_SHIELD 70
+#define S_BLOOD 72
+#define S_HASTE 74
+#define S_AI_SPELLS 76
 /*
 	#define US_DRAIN			0x0001
 	#define US_POLYMORPH		0x0002
@@ -484,37 +508,47 @@
 	#define US_RAISE			0x0020
 	#define US_WHIRLWIND		0x0040
 */
-#define S_NEXT_FIRE 78//2 bytes
-
+#define S_NEXT_FIRE 78
 #define S_FLASH_COLOR 80
 #define S_FLASH_COUNTER 81
 //82 83 unknown bytes
-#define S_ATTACKER_POINTER 84//4 bytes pointer to unit
+#define S_ATTACKER_POINTER 84
 //ai bytes
-#define S_AI_DEST_X 88//2 bytes
-#define S_AI_DEST_Y 90//2 bytes
+#define S_AI_DEST_X 88
+#define S_AI_DEST_Y 90
 #define S_AI_DEST_REGION 92
-//unknown 93 94
+#define S_AI_ORDER 94
+
+	#define AI_ORDER_NONE 0
+	#define AI_ORDER_DEFEND 1
+	#define AI_ORDER_ATTACK 2
+	#define AI_ORDER_TRANSPORT 3
+	#define AI_ORDER_PATROL 4
+	#define AI_ORDER_GUARD 5
+	#define AI_ORDER_SHIP_PATROL 6
+
 #define S_AI_AIFLAGS 95
 
-//unknown bytes
+//ai flags
+	#define AI_PLEASE_TRANSPORT 0x1
+	#define AI_PASSIVE 0x2
 
-#define S_NEXT_UNIT_POINTER 104//4 bytes pointer to unit
+#define S_NEXT_UNIT_POINTER 104
 
 //peon type
-#define S_LAST_HARVEST_X 108//2 bytes
-#define S_LAST_HARVEST_Y 110//2 bytes
-#define S_PEON_GOLDMINE_POINTER 112//4 bytes pointer to unit
+#define S_LAST_HARVEST_X 108
+#define S_LAST_HARVEST_Y 110
+#define S_PEON_GOLDMINE_POINTER 112
 #define S_PEON_TREE_CHOPS 116
 #define S_PEON_FLAGS 117
 
-	#define PEON_HARVEST_GOLD	0x80
-	#define PEON_HARVEST_LUMBER	0x40
-	#define PEON_LOADED			0x20
-	#define PEON_ENTERED		0x10
-	#define PEON_SAVED_LOCATION	0x08
-	#define PEON_IN_CASTLE		0x04
-	#define PEON_CHOPPING		0x02
+#define PEON_HARVEST_GOLD	0x80
+#define PEON_HARVEST_LUMBER	0x40
+#define PEON_LOADED			0x20
+#define PEON_ENTERED		0x10
+#define PEON_SAVED_LOCATION	0x08
+#define PEON_IN_CASTLE		0x04
+#define PEON_CHOPPING		0x02
 
 #define S_PEON_AI_PARM 118
 /*
@@ -530,31 +564,32 @@
 //build type
 #define S_BUILD_ORDER 108
 #define S_BUILD_TYPE 109
-#define S_BUILD_PROGRES 110//2 bytes
-#define S_BUILD_PROGRES_TOTAL 112//2 bytes
+#define S_BUILD_PROGRES 110
+#define S_BUILD_PROGRES_TOTAL 112
 
-#define S_KILLS 120//unknown byte now used for kills
+#define S_KILLS 120//unknown byte used for kills
 //byte 121?
 #define S_ATTACK_COUNTER 122
 //unknown bytes
 
 //peon type 2
-#define S_PEON_BUILD 127//id of unit that peon will build
-#define S_PEON_BUILD_X 128//2 bytes
-#define S_PEON_BUILD_Y 130//2 bytes
+#define S_PEON_BUILD 127
+#define S_PEON_BUILD_X 128
+#define S_PEON_BUILD_Y 130
 
 //build type 2
-#define S_RESOURCES 130//2 bytes
+#define S_RESOURCES 130
+//byte 131?
 
-#define S_ORDER_X 132//2 bytes
-#define S_ORDER_Y 134//2 bytes
-#define S_ORDER_UNIT_POINTER 136//4 bytes pointer to unit
+#define S_ORDER_X 132
+#define S_ORDER_Y 134
+#define S_ORDER_UNIT_POINTER 136
 //unknown byte 140
 #define S_RETARGET_ORDER 141
 //unknown byte timer? 142
 //unknown byte 143
-#define S_RETARGET_X1 144//2 bytes
-#define S_RETARGET_Y1 146//2 bytes
-#define S_RETARGET_X2 148//2 bytes
-#define S_RETARGET_Y2 150//2 bytes
+#define S_RETARGET_X1 144
+#define S_RETARGET_Y1 146
+#define S_RETARGET_X2 148
+#define S_RETARGET_Y2 150
 //152 END
