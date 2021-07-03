@@ -14,11 +14,13 @@ int captk = 0;//number of units in captured array
 byte ua[255] = { 255 };//attackers array
 byte ut[255] = { 255 };//targets array     only unit ua[i] can deal damage to unit ut[i]
 byte runes[9] = { 0 };//runestone special abilities flags
+bool first_step = false;//first step of trigger
 bool table = false;//show win/lose table
 bool agr = false;//allied comps aggro if attacked
 bool cpt = false;//can buildings be captured on low hp
 bool pcpt = false;//only peons can capture low hp build
 bool thcpt = false;//if th captured on low hp, capture all units of that player
+bool ucpt = false;//units capture
 bool steal = false;//if can steal resources
 bool aport = false;//only allies can teleport in portal
 bool mport = false;//portal can teleport only if have mage(or dk) nearby
@@ -41,12 +43,24 @@ bool blood_f = false;//blood fixed
 bool more_res = false;//can get more resources
 bool path_fixed = false;//path fix
 bool ai_fixed = false;//ai fix
+bool peon_steal = false;//peons can steal from other peons
+bool saveload_fixed = false;//saveload ai break bug fix
 byte m_slow_aura[255] = { 255 };//units that have slow aura
 byte m_death_aura[255] = { 255 };//units that have death aura
 byte m_sneak[255] = { 255 };//units that have hide ability
 byte m_devotion[255] = { 255 };//units that have defence aura
 byte m_vampire[255] = { 255 };//units that have vampire aura
 byte m_prvnt[255] = { 255 };//units that have prevent loss
+
+struct Vizs
+{
+    byte x = 0;
+    byte y = 0;
+    byte p = 0;
+    byte s = 0;
+};
+Vizs vizs_areas[2000];
+int vizs_n = 0;
 
 char sheep_build[] = "\x0\x0\x73\x0\xf0\x40\x44\x0\xd0\xe6\x40\x0\x1\x39\x28\x1\x0\x0\x0\x0";
 char demon_build[] = "\x0\x0\x25\x0\xf0\x40\x44\x0\xd0\xe6\x40\x0\x1\x38\x18\x1\x0\x0\x0\x0";
@@ -138,9 +152,16 @@ void lose(bool t)
         char buf[] = "\x3b";
         PATCH_SET((char*)LOSE_SHOW_TABLE, buf);
     }
-    char l[] = "\x2\x0\x0\x0";
-    PATCH_SET((char*)(ENDGAME_STATE + (4 * (*(byte*)LOCAL_PLAYER))), l);
-    ((void (*)())F_LOSE)();//original lose func
+	if (!first_step)
+	{
+		char l[] = "\x2\x0\x0\x0";
+		PATCH_SET((char*)(ENDGAME_STATE + (4 * (*(byte*)LOCAL_PLAYER))), l);
+		((void (*)())F_LOSE)();//original lose func
+	}
+	else
+	{
+		patch_setdword((DWORD*)0x004C0D38, (DWORD)F_LOSE);
+	}
 }
 
 void win(bool t)
@@ -155,9 +176,16 @@ void win(bool t)
         char buf[] = "\x74";
         PATCH_SET((char*)WIN_SHOW_TABLE, buf);
     }
-    char l[] = "\x3\x0\x0\x0";
-    PATCH_SET((char*)(ENDGAME_STATE + (4 * (*(byte*)LOCAL_PLAYER))), l);
-    ((void (*)())F_WIN)();//original win func
+	if (!first_step)
+	{
+		char l[] = "\x3\x0\x0\x0";
+		PATCH_SET((char*)(ENDGAME_STATE + (4 * (*(byte*)LOCAL_PLAYER))), l);
+		((void (*)())F_WIN)();//original win func
+	}
+	else
+	{
+		patch_setdword((DWORD*)0x004C0D38, (DWORD)F_WIN);
+	}
 }
 
 void lose2(bool t, byte vid)
@@ -404,6 +432,32 @@ bool check_unit_near_death(int* p)
     else
         dead = true;
     return dead;
+}
+
+bool check_peon_loaded(int* p, byte r)
+{
+    bool f = false;
+    if (p)
+    {
+        if (r == 0)
+        {
+            if (((*((byte*)((uintptr_t)p + S_PEON_FLAGS)) & PEON_LOADED) != 0)
+                && ((*((byte*)((uintptr_t)p + S_PEON_FLAGS)) & PEON_HARVEST_GOLD) != 0))
+                f = true;
+        }
+        if (r == 1)
+        {
+            if (((*((byte*)((uintptr_t)p + S_PEON_FLAGS)) & PEON_LOADED) != 0)
+                && ((*((byte*)((uintptr_t)p + S_PEON_FLAGS)) & PEON_HARVEST_LUMBER) != 0))
+                f = true;
+        }
+        if (r == 2)
+        {
+            if (((*((byte*)((uintptr_t)p + S_PEON_FLAGS)) & PEON_LOADED) != 0))
+                f = true;
+        }
+    }
+    return f;
 }
 
 void find_all_units(byte id)
@@ -868,6 +922,42 @@ void sort_rune_near()
     }
 }
 
+void sort_peon_loaded(byte r)
+{
+    int k = 0;
+    for (int i = 0; i < units; i++)
+    {
+        if (check_peon_loaded(unit[i], r))
+        {
+            unitt[k] = unit[i];
+            k++;
+        }
+    }
+    units = k;
+    for (int i = 0; i < units; i++)
+    {
+        unit[i] = unitt[i];
+    }
+}
+
+void sort_peon_not_loaded(byte r)
+{
+    int k = 0;
+    for (int i = 0; i < units; i++)
+    {
+        if (!check_peon_loaded(unit[i], r))
+        {
+            unitt[k] = unit[i];
+            k++;
+        }
+    }
+    units = k;
+    for (int i = 0; i < units; i++)
+    {
+        unit[i] = unitt[i];
+    }
+}
+
 void set_stat_all(byte pr, int v)
 {
     for (int i = 0; i < units; i++)
@@ -935,11 +1025,11 @@ void flame_all()
     }
 }
 
-void damag(int* p, byte n)
+void damag(int* p, byte n1, byte n2)
 {
-    //dealt X damage to unit
     WORD hp = *((WORD*)((uintptr_t)p + S_HP));//unit hp
-    if (hp < n)
+    WORD n = n1 + 256 * n2;
+    if (hp > n)
     {
         hp -= n;
         set_stat(p, hp, S_HP);
@@ -951,19 +1041,20 @@ void damag(int* p, byte n)
     }
 }
 
-void damag_all(byte n)
+void damag_all(byte n1, byte n2)
 {
     for (int i = 0; i < units; i++)
     {
-        damag(unit[i], n);
+        damag(unit[i], n1, n2);
     }
 }
 
-void heal(int* p, byte n)
+void heal(int* p, byte n1, byte n2)
 {
     byte id = *((byte*)((uintptr_t)p + S_ID));//unit id
     WORD mhp = *(WORD*)(UNIT_HP_TABLE + 2 * id);//max hp
     WORD hp = *((WORD*)((uintptr_t)p + S_HP));//unit hp
+    WORD n = n1 + 256 * n2;
     if (hp < mhp)
     {
         hp += n;
@@ -973,11 +1064,11 @@ void heal(int* p, byte n)
     }
 }
 
-void heal_all(byte n)
+void heal_all(byte n1, byte n2)
 {
     for (int i = 0; i < units; i++)
     {
-        heal(unit[i], n);
+        heal(unit[i], n1, n2);
     }
 }
 
@@ -1001,6 +1092,84 @@ void mana_regen_all(byte n)
     for (int i = 0; i < units; i++)
     {
         mana_regen(unit[i], n);
+    }
+}
+
+void peon_load(int* u, byte r)
+{
+    byte f = *((byte*)((uintptr_t)u + S_PEON_FLAGS));
+    if (!(f & PEON_LOADED))
+    {
+        if (r == 0)
+        {
+            f |= PEON_LOADED;
+            f |= PEON_HARVEST_GOLD;
+            set_stat(u, f, S_PEON_FLAGS);
+            ((void (*)(int*))F_GROUP_SET)(u);
+        }
+        else
+        {
+            f |= PEON_LOADED;
+            f |= PEON_HARVEST_LUMBER;
+            set_stat(u, f, S_PEON_FLAGS);
+            ((void (*)(int*))F_GROUP_SET)(u);
+        }
+    }
+}
+
+void peon_load_all(byte r)
+{
+    for (int i = 0; i < units; i++)
+    {
+        peon_load(unit[i], r);
+    }
+}
+
+void viz_area(byte x, byte y, byte pl, byte sz)
+{
+    int Vf = F_VISION2;
+    switch (sz)
+    {
+    case 0:Vf = F_VISION2; break;
+    case 1:Vf = F_VISION2; break;
+    case 2:Vf = F_VISION2; break;
+    case 3:Vf = F_VISION3; break;
+    case 4:Vf = F_VISION4; break;
+    case 5:Vf = F_VISION5; break;
+    case 6:Vf = F_VISION6; break;
+    case 7:Vf = F_VISION7; break;
+    case 8:Vf = F_VISION8; break;
+    case 9:Vf = F_VISION9; break;
+    default: Vf = F_VISION2; break;
+    }
+    for (byte i = 0; i < 8; i++)
+    {
+        if (((1 << i) & pl) != 0)
+        {
+            ((void (*)(WORD, WORD, byte))Vf)(x, y, i);
+        }
+    }
+}
+
+void viz_area_add(byte x, byte y, byte pl, byte sz)
+{
+    if ((vizs_n >= 0) && (vizs_n <= 255))
+    {
+        vizs_areas[vizs_n].x = x;
+        vizs_areas[vizs_n].y = y;
+        vizs_areas[vizs_n].p = pl;
+        vizs_areas[vizs_n].s = sz;
+        vizs_n++;
+    }
+}
+
+void viz_area_all(byte pl, byte sz)
+{
+    for (int i = 0; i < units; i++)
+    {
+        byte x = *((byte*)((uintptr_t)unit[i] + S_X));
+        byte y = *((byte*)((uintptr_t)unit[i] + S_Y));
+        viz_area_add(x, y, pl, sz);
     }
 }
 
@@ -1227,7 +1396,7 @@ void runestone()
                         sort_stat(S_KILLS + 1, 0, CMP_EQ);
                         set_stat_all(S_KILLS + 1, 100);
                         if (runes[5] != 0)mana_regen_all(runes[5]);
-                        if (runes[6] != 0)heal_all(runes[6]);
+                        if (runes[6] != 0)heal_all(runes[6], 0);
                     }
                 }
                 p = (int*)(*((int*)((uintptr_t)p + S_NEXT_UNIT_POINTER)));
@@ -1347,7 +1516,7 @@ void wharf()
                             if (!check_ally(o, ui))//only allied ships
                                 sort_stat(S_OWNER, ui, CMP_NEQ);
                         }
-                        heal_all(4);
+                        heal_all(4, 0);
                     }
                 }
                 p = (int*)(*((int*)((uintptr_t)p + S_NEXT_UNIT_POINTER)));
@@ -1406,7 +1575,7 @@ void paladin()
                                     while (!(mp >= (shp * cost)) && (shp > 0))shp -= 1;
                                     if (shp > 0)//if can heal at least 1 hp
                                     {
-                                        heal(unit[i], (byte)shp);
+                                        heal(unit[i], (byte)shp, 0);
                                         mp -= shp * cost;
                                         *((byte*)((uintptr_t)p + S_MANA)) = mp;
                                         WORD xx = *((WORD*)((uintptr_t)unit[i] + S_DRAW_X));
@@ -2438,7 +2607,7 @@ void comp_aggro(int* trg, int* atk)
     }
 }
 
-void capture(int* trg, int* atk)
+bool capture(int* trg, int* atk)
 {
     byte own1 = *((byte*)((uintptr_t)trg + S_OWNER));
     byte own2 = *((byte*)((uintptr_t)atk + S_OWNER));
@@ -2448,52 +2617,77 @@ void capture(int* trg, int* atk)
         {//if only peons can capture and attacker is peon(or peasant)
             if (cmp_stat(trg, U_FARM, S_ID, CMP_BIGGER_EQ))//only buildings (id >= farm)
             {
-                if (check_unit_complete(trg))//completed buildings
+                if (cpt)
                 {
-                    byte tid = *((byte*)((uintptr_t)trg + S_ID));//unit id
-                    WORD mhp = *(WORD*)(UNIT_HP_TABLE + 2 * tid);//max hp
-                    WORD hp = *((WORD*)((uintptr_t)trg + S_HP));//unit hp
-                    if ((float)hp <= (((float)mhp / 100.0 * 5) + 1))//if hp<=5%
+                    if (check_unit_complete(trg))//completed buildings
                     {
-                        heal(trg, (byte)(((float)mhp / 100.0 * 5) + 1));//heal 5% hp so that it will not die suddenly
-                        if (thcpt)//if th captured, capture all
+                        byte tid = *((byte*)((uintptr_t)trg + S_ID));//unit id
+                        WORD mhp = *(WORD*)(UNIT_HP_TABLE + 2 * tid);//max hp
+                        WORD hp = *((WORD*)((uintptr_t)trg + S_HP));//unit hp
+                        if ((float)hp <= (((float)mhp / 100.0 * 5) + 1))//if hp<=5%
                         {
-                            bool mf = (tid == U_TOWN_HALL) || (tid == U_GREAT_HALL);
-                            if (get_val(TH2, (int)own1) != 0)mf = (tid == U_KEEP) || (tid == U_STRONGHOLD);
-                            if (get_val(TH3, (int)own1) != 0)mf = (tid == U_CASTLE) || (tid == U_FORTRESS);
-                            if (mf)
-                            {//THs of 1 2 and 3 tier
-                                captk = 0;
-                                for (int i = 0; i < 16; i++)
-                                {
-                                    int* p = (int*)(UNITS_LISTS + 4 * i);
-                                    if (p)
+                            WORD hl = (WORD)(((float)mhp / 100.0 * 5) + 1);
+                            heal(trg, hl % 256, hl / 256);//heal 5% hp so that it will not die suddenly
+                            if (thcpt)//if th captured, capture all
+                            {
+                                bool mf = (tid == U_TOWN_HALL) || (tid == U_GREAT_HALL);
+                                if (get_val(TH2, (int)own1) != 0)mf = (tid == U_KEEP) || (tid == U_STRONGHOLD);
+                                if (get_val(TH3, (int)own1) != 0)mf = (tid == U_CASTLE) || (tid == U_FORTRESS);
+                                if (mf)
+                                {//THs of 1 2 and 3 tier
+                                    captk = 0;
+                                    for (int i = 0; i < 16; i++)
                                     {
-                                        p = (int*)(*p);
-                                        while (p)
+                                        int* p = (int*)(UNITS_LISTS + 4 * i);
+                                        if (p)
                                         {
-                                            if (!check_unit_dead(p))
+                                            p = (int*)(*p);
+                                            while (p)
                                             {
-                                                if (cmp_stat(p, (int)own1, S_OWNER, CMP_EQ))//capture all units of that player
+                                                if (!check_unit_dead(p))
                                                 {
-                                                    capt[captk] = p;
-                                                    captk++;
+                                                    if (cmp_stat(p, (int)own1, S_OWNER, CMP_EQ))//capture all units of that player
+                                                    {
+                                                        capt[captk] = p;
+                                                        captk++;
+                                                    }
                                                 }
+                                                p = (int*)(*((int*)((uintptr_t)p + S_NEXT_UNIT_POINTER)));
                                             }
-                                            p = (int*)(*((int*)((uintptr_t)p + S_NEXT_UNIT_POINTER)));
                                         }
                                     }
+                                    for (int i = 0; i < captk; i++)
+                                        give(capt[i], own2);
                                 }
-                                for (int i = 0; i < captk; i++)
-                                    give(capt[i], own2);
                             }
+                            give(trg, own2);
+                            return true;
                         }
-                        give(trg, own2);
+                    }
+                }
+            }
+            else//units capture
+            {
+                if (ucpt)
+                {
+                    if (!check_unit_dead(trg))
+                    {
+                        byte tid = *((byte*)((uintptr_t)trg + S_ID));//unit id
+                        WORD mhp = *(WORD*)(UNIT_HP_TABLE + 2 * tid);//max hp
+                        WORD hp = *((WORD*)((uintptr_t)trg + S_HP));//unit hp
+                        if ((float)hp <= (((float)mhp / 100.0 * 5) + 1))//if hp<=5%
+                        {
+                            WORD hl = (WORD)(((float)mhp / 100.0 * 50) + 1);
+                            heal(trg, hl % 256, hl / 256);//heal 50% hp so that it will not die suddenly
+                            give(trg, own2);
+                            return true;
+                        }
                     }
                 }
             }
         }
     }
+    return false;
 }
 
 void steal_res(int* trg, int* atk)
@@ -2604,10 +2798,46 @@ bool devotion_aura(int* trg, byte id)
         return false;
 }
 
+void peon_steal_attack(int* trg, int* atk)
+{
+    byte tid = *((byte*)((uintptr_t)trg + S_ID));
+    byte aid = *((byte*)((uintptr_t)atk + S_ID));
+    if ((aid == U_PEASANT) || (aid == U_PEON))
+    {
+        if ((tid == U_PEASANT) || (tid == U_PEON))
+        {
+            byte tf = *((byte*)((uintptr_t)trg + S_PEON_FLAGS));
+            byte af = *((byte*)((uintptr_t)atk + S_PEON_FLAGS));
+            if (!(af & PEON_LOADED))
+            {
+                if ((tf & PEON_LOADED))
+                {
+                    tf &= ~PEON_LOADED;
+                    af |= PEON_LOADED;
+                    if ((tf & PEON_HARVEST_GOLD))
+                    {
+                        tf &= ~PEON_HARVEST_GOLD;
+                        af |= PEON_HARVEST_GOLD;
+                    }
+                    if ((tf & PEON_HARVEST_LUMBER))
+                    {
+                        tf &= ~PEON_HARVEST_LUMBER;
+                        af |= PEON_HARVEST_LUMBER;
+                    }
+                    set_stat(trg, tf, S_PEON_FLAGS);
+                    set_stat(atk, af, S_PEON_FLAGS);
+                    ((void (*)(int*))F_GROUP_SET)(trg);
+                    ((void (*)(int*))F_GROUP_SET)(atk);
+                }
+            }
+        }
+    }
+}
+
 PROC g_proc_00451054;
 void count_add_to_tables_load_game(int* u)
 {
-    if (ai_fixed)
+    if (saveload_fixed)
     {
         byte f = *((byte*)((uintptr_t)u + S_AI_AIFLAGS));
         byte ff = f | AI_PASSIVE;
@@ -2624,7 +2854,7 @@ PROC g_proc_00438985;
 void unset_peon_ai_flags(int* u)
 {
     ((void (*)(int*))g_proc_00438A5C)(u);//original
-    if (ai_fixed)
+    if (saveload_fixed)
     {
         char rep[] = "\x0\x0";
         WORD p = 0;
@@ -2727,7 +2957,7 @@ void tech_reinit()
 
 void building_start_build(int* u,byte id,byte o)
 {
-    ((void (*)(int*, byte, byte))0x0040E2A0)(u, id, o);
+    ((void (*)(int*, byte, byte))F_BLDG_START_BUILD)(u, id, o);
 }
 
 void build_inventor(int* u)
@@ -2735,19 +2965,19 @@ void build_inventor(int* u)
     if (check_unit_complete(u))
     {
         byte f = *((byte*)((uintptr_t)u + S_FLAGS1));
-        if (f & UF_BUILD_ON)
+        if (!(f & UF_BUILD_ON))
         {
             byte id = *((byte*)((uintptr_t)u + S_ID));
             byte o = *((byte*)((uintptr_t)u + S_OWNER));
             int spr = get_val(ACTIVE_SAPPERS, o);
-            byte nspr = *(byte*)(0x004AF0E7 + 48 * o);
+            byte nspr = *(byte*)(AIP_NEED_SAP + 48 * o);
             if (nspr > spr)
             {
                 if (id == U_INVENTOR)building_start_build(u, U_DWARWES, 0);
                 if (id == U_ALCHEMIST)building_start_build(u, U_GOBLINS, 0);
             }
             int flr = get_val(ACTIVE_FLYER, o);
-            byte nflr = *(byte*)(0x004AF0E6 + 48 * o);
+            byte nflr = *(byte*)(AIP_NEED_FLYER + 48 * o);
             if (nflr > flr)
             {
                 if (id == U_INVENTOR)building_start_build(u, U_FLYER, 0);
@@ -2764,14 +2994,14 @@ void build_sap_fix(bool f)
         char b1[] = "\x80\xfa\x40\x0";
         void (*r1) (int*) = build_inventor;
         patch_setdword((DWORD*)b1, (DWORD)r1);
-        PATCH_SET((char*)0x00494BC8, b1);//human inv
-        PATCH_SET((char*)(0x00494BC8 + 4), b1);//orc inv
+        PATCH_SET((char*)BLDG_WAIT_INVENTOR, b1);//human inv
+        PATCH_SET((char*)(BLDG_WAIT_INVENTOR + 4), b1);//orc inv
     }
     else
     {
         char b1[] = "\x80\xfa\x40\x0";
-        PATCH_SET((char*)0x00494BC8, b1);//human inv
-        PATCH_SET((char*)(0x00494BC8 + 4), b1);//orc inv
+        PATCH_SET((char*)BLDG_WAIT_INVENTOR, b1);//human inv
+        PATCH_SET((char*)(BLDG_WAIT_INVENTOR + 4), b1);//orc inv
     }
 }
 
@@ -2780,39 +3010,41 @@ void ai_fix_plugin(bool f)
     if (f)
     {
         char b1[] = "\xb2\x02";
-        PATCH_SET((char*)0x00439022, b1);//2 peon rep
+        PATCH_SET((char*)AIFIX_PEONS_REP, b1);//2 peon rep
         char b21[] = "\xbb\x8";
-        PATCH_SET((char*)0x004392c0, b21);//gold lumber
+        PATCH_SET((char*)AIFIX_GOLD_LUMB1, b21);//gold lumber
         char b22[] = "\xb4\x4";
-        PATCH_SET((char*)0x004392df, b22);//gold lumber
+        PATCH_SET((char*)AIFIX_GOLD_LUMB2, b22);//gold lumber
         char b3[] = "\x1";
-        PATCH_SET((char*)0x0043A3FF, b3);//packed build
+        PATCH_SET((char*)AIFIX_BUILD_SIZE, b3);//packed build
         char b4[] = "\xbe\x0\x0\x0\x0\x90\x90";
-        PATCH_SET((char*)0x004271E3, b4);//th corner
+        PATCH_SET((char*)AIFIX_FIND_HOME, b4);//th corner
         char b5[] = "\x90\x90";
-        PATCH_SET((char*)0x0042626F, b5);//fix dd/bliz
+        PATCH_SET((char*)AIFIX_DD_BLIZ_FIX, b5);//fix dd/bliz
         char b6[] = "\x90\x90\x90\x90\x90\x90";
-        PATCH_SET((char*)0x004390AD, b6);//powerbuild
+        PATCH_SET((char*)AIFIX_POWERBUILD, b6);//powerbuild
         char b7[] = "\x90\x90\x90\x90";
-        PATCH_SET((char*)0x0040B1AB, b7);//cata afraid
+        PATCH_SET((char*)AIFIX_CATA_AFRAID, b7);//cata afraid
         char b8[] = "\x70\x79";
-        PATCH_SET((char*)0x0049D934, b8);//ships random patrol
+        PATCH_SET((char*)AIFIX_SHIPS_PATROL, b8);//ships random patrol
 
         char m1[] = "\xa9\x0\x0\x0\x4\x74\x16\x8b\x44\x24\xc\x66\x83\x78\x44\x0\x75\xb\x90\x90\x90\x90";
-        PATCH_SET((char*)0x00425C79, m1);//inviz cond
+        PATCH_SET((char*)AIFIX_INVIZ_COND, m1);//inviz cond
         char m2[] = "\x90\x90\x90";
-        PATCH_SET((char*)0x0042558E, m2);//no x3 bliz mp
-        PATCH_SET((char*)0x004256CC, m2);//no x3 bliz mp
+        PATCH_SET((char*)AIFIX_BLIZ_3MP1, m2);//no x3 bliz mp
+        PATCH_SET((char*)AIFIX_BLIZ_3MP2, m2);//no x3 bliz mp
         char m3[] = "\x33\xd2\x8a\x50\x27\x3e\x8b\x4\x95\x24\xf5\x4c\x0\xa8\x20\x75\x19\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90";
-        PATCH_SET((char*)0x00425B14, m3);//fire cond
+        PATCH_SET((char*)AIFIX_FIREBALL_COND, m3);//fire cond
         char m4[] = "\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90\x90";
-        PATCH_SET((char*)0x00425B81, m4);//bliz cond
+        PATCH_SET((char*)AIFIX_BLIZ_COND, m4);//bliz cond
         char m5[] = "\x96";
-        PATCH_SET((char*)0x004255D2, m5);//no inv poly > jmp exit
+        PATCH_SET((char*)AIFIX_INV_POLY_JMP, m5);//no inv poly > jmp exit
         char m6[] = "\xe9\x6c\x2\x0\x0";
-        PATCH_SET((char*)0x00425569, m6);//jmp to exit
+        PATCH_SET((char*)AIFIX_INV_POLY_CAVE, m6);//jmp to exit
         char m7[] = "\x90\x90";
-        PATCH_SET((char*)0x00424F85, m7);//runes no inviz
+        PATCH_SET((char*)AIFIX_RUNES_INV, m7);//runes no inviz
+		char m8[] = "\xeb";
+        PATCH_SET((char*)AIFIX_STARTING_MAGE, m8);//starting mage
 
         build_sap_fix(true);
 
@@ -2821,40 +3053,42 @@ void ai_fix_plugin(bool f)
     else
     {
         char b1[] = "\x8a\xd0";
-        PATCH_SET((char*)0x00439022, b1);//2 peon rep
+        PATCH_SET((char*)AIFIX_PEONS_REP, b1);//2 peon rep
         char b21[] = "\xd0\x7";
-        PATCH_SET((char*)0x004392c0, b21);//gold lumber
+        PATCH_SET((char*)AIFIX_GOLD_LUMB1, b21);//gold lumber
         char b22[] = "\xf4\x1";
-        PATCH_SET((char*)0x004392df, b22);//gold lumber
+        PATCH_SET((char*)AIFIX_GOLD_LUMB2, b22);//gold lumber
         char b3[] = "\x6";
-        PATCH_SET((char*)0x0043A3FF, b3);//packed build
+        PATCH_SET((char*)AIFIX_BUILD_SIZE, b3);//packed build
         char b4[] = "\xe8\xf8\x2a\x1\x0\x8b\xf0";
-        PATCH_SET((char*)0x004271E3, b4);//th corner
+        PATCH_SET((char*)AIFIX_FIND_HOME, b4);//th corner
         char b5[] = "\x75\x7";
-        PATCH_SET((char*)0x0042626F, b5);//fix dd/bliz
+        PATCH_SET((char*)AIFIX_DD_BLIZ_FIX, b5);//fix dd/bliz
         char b6[] = "\xf\x84\x78\x1\x0\x0";
-        PATCH_SET((char*)0x004390AD, b6);//powerbuild
+        PATCH_SET((char*)AIFIX_POWERBUILD, b6);//powerbuild
         char b7[] = "\x89\x44\x24\x10";
-        PATCH_SET((char*)0x0040B1AB, b7);//cata afraid
+        PATCH_SET((char*)AIFIX_CATA_AFRAID, b7);//cata afraid
         char b8[] = "\x10\x7A";
-        PATCH_SET((char*)0x0049D934, b8);//ships random patrol
+        PATCH_SET((char*)AIFIX_SHIPS_PATROL, b8);//ships random patrol
 
         char m1[] = "\x80\x7a\x5e\x2\x75\x17\xa9\x0\x0\x2\x0\x75\x9\x80\xb9\xf0\xfe\x4c\x0\x1\x74\x7";
-        PATCH_SET((char*)0x00425C79, m1);//inviz cond
+        PATCH_SET((char*)AIFIX_INVIZ_COND, m1);//inviz cond
         char m2[] = "\x8d\x4\x40";
-        PATCH_SET((char*)0x0042558E, m2);//no x3 bliz mp
+        PATCH_SET((char*)AIFIX_BLIZ_3MP1, m2);//no x3 bliz mp
         m2[1] = '\x14';
-        PATCH_SET((char*)0x004256CC, m2);//no x3 bliz mp
+        PATCH_SET((char*)AIFIX_BLIZ_3MP2, m2);//no x3 bliz mp
         char m3[] = "\x6a\x3\x50\x56\xe8\x3\xff\xff\xff\x83\xc4\xc\x85\xc0\x74\x12\x56\xe8\xe6\xd8\x2\x0\x66\xd1\xe8\x83\xc4\x4\x66\x39\x46\x22\x73\x8";
-        PATCH_SET((char*)0x00425B14, m3);//fire cond
+        PATCH_SET((char*)AIFIX_FIREBALL_COND, m3);//fire cond
         char m4[] = "\x6a\x3\x50\x51\xe8\x96\xfe\xff\xff\x83\xc4\xc\x85\xc0\x75\x07";
-        PATCH_SET((char*)0x00425B81, m4);//bliz cond
+        PATCH_SET((char*)AIFIX_BLIZ_COND, m4);//bliz cond
         char m5[] = "\xc";
-        PATCH_SET((char*)0x004255D2, m5);//no inv poly > jmp exit
+        PATCH_SET((char*)AIFIX_INV_POLY_JMP, m5);//no inv poly > jmp exit
         char m6[] = "\x90\x90\x90\x90\x90";
-        PATCH_SET((char*)0x00425569, m6);//jmp to exit
+        PATCH_SET((char*)AIFIX_INV_POLY_CAVE, m6);//jmp to exit
         char m7[] = "\x74\x1d";
-        PATCH_SET((char*)0x00424F85, m7);//runes no inviz
+        PATCH_SET((char*)AIFIX_RUNES_INV, m7);//runes no inviz
+		char m8[] = "\x74";
+        PATCH_SET((char*)AIFIX_STARTING_MAGE, m8);//starting mage
 
         build_sap_fix(false);
 
@@ -2891,23 +3125,28 @@ int* cast_raise(int* u, int a1, int a2, int a3)
     if (ai_fixed)
     {
         byte o = *((byte*)((uintptr_t)u + S_OWNER));
-        if (((*(byte*)(SPELLS_LEARNED + 4 * o) & (1 << RAISE_DEAD)) != 0))return NULL;
-        byte mp = *((byte*)((uintptr_t)u + S_MANA));
-        byte cost = *(byte*)(MANACOST + 2 * RAISE_DEAD);
-        if (mp < cost)return NULL;
-        byte x = *((byte*)((uintptr_t)u + S_X));
-        byte y = *((byte*)((uintptr_t)u + S_Y));
-        set_region((int)x - 8, (int)y - 8, (int)x + 8, (int)y + 8);//set region around myself
-        find_all_units(ANY_BUILDING);//dead body
-        sort_in_region();
-        sort_hidden();
-        sort_near_death();
-        if (units != 0)
+        find_all_alive_units(U_SKELETON);
+        sort_stat(S_OWNER, o, CMP_EQ);
+        if (units < 10)
         {
-            byte xx = *((byte*)((uintptr_t)unit[0] + S_X));
-            byte yy = *((byte*)((uintptr_t)unit[0] + S_Y));
-            give_order(u, xx, yy, ORDER_SPELL_RAISEDEAD);
-            return unit[0];
+            if (((*(byte*)(SPELLS_LEARNED + 4 * o) & (1 << RAISE_DEAD)) != 0))return NULL;
+            byte mp = *((byte*)((uintptr_t)u + S_MANA));
+            byte cost = *(byte*)(MANACOST + 2 * RAISE_DEAD);
+            if (mp < cost)return NULL;
+            byte x = *((byte*)((uintptr_t)u + S_X));
+            byte y = *((byte*)((uintptr_t)u + S_Y));
+            set_region((int)x - 8, (int)y - 8, (int)x + 8, (int)y + 8);//set region around myself
+            find_all_units(ANY_BUILDING);//dead body
+            sort_in_region();
+            sort_hidden();
+            sort_near_death();
+            if (units != 0)
+            {
+                byte xx = *((byte*)((uintptr_t)unit[0] + S_X));
+                byte yy = *((byte*)((uintptr_t)unit[0] + S_Y));
+                give_order(u, xx, yy, ORDER_SPELL_RAISEDEAD);
+                return unit[0];
+            }
         }
         return NULL;
     }
@@ -3278,6 +3517,60 @@ void unstuk()
     }
 }
 
+void goldmine_ai()
+{
+    for (int i = 0; i < 16; i++)
+    {
+        int* p = (int*)(UNITS_LISTS + 4 * i);
+        if (p)
+        {
+            p = (int*)(*p);
+            while (p)
+            {
+                bool f = ((*((byte*)((uintptr_t)p + S_ID)) == U_MINE));
+                if (f)
+                {
+                    if (check_unit_complete(p))
+                    {
+                        byte x = *((byte*)((uintptr_t)p + S_X));
+                        byte y = *((byte*)((uintptr_t)p + S_Y));
+                        set_region((int)x - 9, (int)y - 9, (int)x + 8, (int)y + 8);
+                        find_all_alive_units(ANY_BUILDING_4x4);
+                        sort_in_region();
+                        sort_stat(S_ID, U_PORTAL, CMP_NEQ);
+                        bool th = units != 0;
+                        byte x1, y1, x2, y2;
+                        if (x > 3)x1 = x - 3;
+                        else x1 = 0;
+                        if (y > 3)y1 = y - 3;
+                        else y1 = 0;
+                        x += 3;
+                        y += 3;
+                        if (x >= (127 - 3))x2 = 127;
+                        else x2 = x + 3;
+                        if (y >= (127 - 3))y2 = 127;
+                        else y2 = y + 3;
+                        char* sq = (char*)*(int*)(MAP_SQ_POINTER);
+                        byte mxs = *(byte*)MAP_SIZE;//map size
+                        for (int xx = x1; xx < x2; xx++)
+                        {
+                            for (int yy = y1; yy < y2; yy++)
+                            {
+                                char buf[] = "\x0";
+                                buf[0] = *(char*)(sq + 2 * xx + 2 * yy * mxs + 1);
+                                if (th)buf[0] |= SQ_AI_BUILDING >> 8;
+                                else buf[0] &= ~(SQ_AI_BUILDING >> 8);
+                                PATCH_SET((char*)(sq + 2 * xx + 2 * yy * mxs + 1), buf);
+                            }
+                        }
+                    }
+                }
+                p = (int*)(*((int*)((uintptr_t)p + S_NEXT_UNIT_POINTER)));
+            }
+        }
+    }
+}
+
 void unit_timer()
 {
     //timer for transport and runestone heal
@@ -3325,11 +3618,19 @@ void update_spells()
         else
             i = 256;
     }
-	if (ai_fixed)
+	if (saveload_fixed)tech_reinit();
+    if (ai_fixed)
     {
-		tech_reinit();
 		sap_behaviour();
 		unstuk();
+		goldmine_ai();
+    }
+	if (vizs_n > 0)
+    {
+        for (int i = 0; i < vizs_n; i++)
+        {
+            viz_area(vizs_areas[i].x, vizs_areas[i].y, vizs_areas[i].p, vizs_areas[i].s);
+        }
     }
     //PLACE your new functions here
     
@@ -3393,126 +3694,131 @@ char fdmg = 0;//final damage
 void damage(int* atk, int* trg, char dmg)
 {
     fdmg = dmg;
-    if ((trg != NULL) && (atk != NULL))
+    if (replaced)
     {
-        byte aid = *((byte*)((uintptr_t)atk + S_ID));//attacker id
-        byte tid = *((byte*)((uintptr_t)trg + S_ID));//target id
-        byte dmg2 = dmg;//can deal damage by default
-        int i = 0;
-        while (i < 255)
+        if ((trg != NULL) && (atk != NULL))
         {
-            if ((tid == ut[i]) && (aid != ua[i]))
+            if (!check_unit_dead(trg))
             {
-                dmg2 = 0;//canot deal damage
-            }
-            if ((tid == ut[i]) && (aid == ua[i]))//check if only some certain units can attack that unit
-            {
-                dmg2 = dmg;//can deal damage
-                i = 255;
-            }
-            i++;
-            if (ua[i] == 255)//pairs must go in a row
-            {
-                i = 255;
-            }
-        }
-        if (*((WORD*)((uintptr_t)trg + S_SHIELD)) != 0)dmg2 = 0;
-        if (blood_f)//bloodlust fix to manually add x2 dmg
-        {
-            int bdmg = dmg2;
-            if (*((WORD*)((uintptr_t)atk + S_BLOOD)) != 0)bdmg *= 2;
-            if (bdmg > 255)bdmg = 255;
-            if (bdmg != 0)dmg2 = bdmg % 256;
-        }
-        /*
-        if (FALSE)//more damage to air units example
-        {
-            if (aid == U_DEMON)
-            {
-                byte tmov = *((byte*)((uintptr_t)trg + S_MOVEMENT_TYPE));//target mov
-                if (tmov == MOV_AIR)
+                byte aid = *((byte*)((uintptr_t)atk + S_ID));//attacker id
+                byte tid = *((byte*)((uintptr_t)trg + S_ID));//target id
+                byte dmg2 = dmg;//can deal damage by default
+                int i = 0;
+                while (i < 255)
                 {
-                    if (dmg2 != 0)
+                    if ((tid == ut[i]) && (aid != ua[i]))
                     {
-                        int bdmg = dmg2 * 7;
-                        if (bdmg > 255)bdmg = 255;
-                        if (bdmg != 0)dmg2 = bdmg % 256;
+                        dmg2 = 0;//canot deal damage
+                    }
+                    if ((tid == ut[i]) && (aid == ua[i]))//check if only some certain units can attack that unit
+                    {
+                        dmg2 = dmg;//can deal damage
+                        i = 255;
+                    }
+                    i++;
+                    if (ua[i] == 255)//pairs must go in a row
+                    {
+                        i = 255;
                     }
                 }
-            }
-        }
-        */
-        fdmg = dmg2;
-        if (agr)comp_aggro(trg, atk);//check if allied comps go agro
-        if (fdmg != 0)
-        {
-            if (cpt)capture(trg, atk);//check if buildings captured on low hp
-            if (steal)steal_res(trg, atk);
-            if (manaburn)mana_burn(trg, atk);
-            bool f = false;
-            for (int i = 0; i < 255; i++)
-            {
-                if ((m_devotion[i] != 255) && (!f))
-                    f = devotion_aura(trg, m_devotion[i]);
-                else
-                    i = 256;
-            }
-            if (f)//defence
-            {
-                dmg2 = fdmg;
-                if (dmg2 > 3)dmg2 -= 3;
-                else dmg2 = 0;
+                if (*((WORD*)((uintptr_t)trg + S_SHIELD)) != 0)dmg2 = 0;
+                if (blood_f)
+                {
+                    int bdmg = dmg2;
+                    if (*((WORD*)((uintptr_t)atk + S_BLOOD)) != 0)bdmg *= 2;
+                    if (bdmg > 255)bdmg = 255;
+                    if (bdmg != 0)dmg2 = bdmg % 256;
+                }
+                if (war2mod)
+                {
+                    if (aid == U_DEMON)
+                    {
+                        byte tmov = *((byte*)((uintptr_t)trg + S_MOVEMENT_TYPE));//target mov
+                        if (tmov == MOV_AIR)
+                        {
+                            if (dmg2 != 0)
+                            {
+                                int bdmg = dmg2 * 7;
+                                if (bdmg > 255)bdmg = 255;
+                                if (bdmg != 0)dmg2 = bdmg % 256;
+                            }
+                        }
+                    }
+                }
                 fdmg = dmg2;
-            }
-            f = false;
-            for (int i = 0; i < 255; i++)
-            {
-                if ((m_prvnt[i] != 255) && (!f))
-                    f = m_prvnt[i] == tid;
-                else
-                    i = 256;
-            }
-            if (f)//prevent
-            {
-                WORD hp = *((WORD*)((uintptr_t)trg + S_HP));
-                if (hp > 0)
+                if (agr)comp_aggro(trg, atk);//check if allied comps go agro
+                if (fdmg != 0)
                 {
-                    if (hp <= fdmg)
+                    if (cpt || ucpt)if (capture(trg, atk))fdmg = 0;//check if buildings or units captured on low hp
+                    if (steal)steal_res(trg, atk);
+                    if (manaburn)mana_burn(trg, atk);
+                    if (peon_steal)peon_steal_attack(trg, atk);
+                    bool f = false;
+                    for (int i = 0; i < 255; i++)
                     {
-                        fdmg = 0;
-                        set_stat(trg, 300, S_SHIELD);
-                        set_stat(trg, 0, S_HP);
-                        flame(trg);
+                        if ((m_devotion[i] != 255) && (!f))
+                            f = devotion_aura(trg, m_devotion[i]);
+                        else
+                            i = 256;
+                    }
+                    if (f)//defence
+                    {
+                        dmg2 = fdmg;
+                        if (dmg2 > 3)dmg2 -= 3;
+                        else dmg2 = 0;
+                        fdmg = dmg2;
+                    }
+                    f = false;
+                    for (int i = 0; i < 255; i++)
+                    {
+                        if ((m_prvnt[i] != 255) && (!f))
+                            f = m_prvnt[i] == tid;
+                        else
+                            i = 256;
+                    }
+                    if (f)//prevent
+                    {
+                        WORD hp = *((WORD*)((uintptr_t)trg + S_HP));
+                        if (hp > 0)
+                        {
+                            if (hp <= fdmg)
+                            {
+                                fdmg = 0;
+                                set_stat(trg, 300, S_SHIELD);
+                                set_stat(trg, 0, S_HP);
+                                flame(trg);
+                            }
+                        }
+                    }
+                    f = false;
+                    for (int i = 0; i < 255; i++)
+                    {
+                        if ((m_vampire[i] != 255) && (!f))
+                            f = vamp_aura(trg, atk, m_vampire[i]);
+                        else
+                            i = 256;
+                    }
+                    if (f)//vampire
+                    {
+                        WORD hp = *((WORD*)((uintptr_t)trg + S_HP));
+                        byte mult = 2;//2=50%
+                        if (hp > (fdmg / mult + 1))heal(atk, (fdmg / mult + 1), 0);
+                        else heal(atk, hp % 256, 0);
+                        WORD xx = *((WORD*)((uintptr_t)atk + S_DRAW_X));
+                        WORD yy = *((WORD*)((uintptr_t)atk + S_DRAW_Y));
+                        ((void (*)(WORD, WORD, byte))F_BULLET_CREATE)(xx + 16, yy + 16, B_SHOT_FIRE);//create effect
                     }
                 }
-            }
-            f = false;
-            for (int i = 0; i < 255; i++)
-            {
-                if ((m_vampire[i] != 255) && (!f))
-                    f = vamp_aura(trg, atk, m_vampire[i]);
-                else
-                    i = 256;
-            }
-            if (f)//vampire
-            {
-                WORD hp = *((WORD*)((uintptr_t)trg + S_HP));
-                byte mult = 2;//2=50% 4=25%
-                if (hp > (fdmg / mult + 1))heal(atk, (fdmg / mult + 1));//steal 50% of damage +1 of target HP
-                else heal(atk, hp % 256);//or steall all if damage is too big
-                WORD xx = *((WORD*)((uintptr_t)atk + S_DRAW_X));
-                WORD yy = *((WORD*)((uintptr_t)atk + S_DRAW_Y));
-                ((void (*)(WORD, WORD, byte))F_BULLET_CREATE)(xx + 16, yy + 16, B_SHOT_FIRE);//create effect
-            }
-        }
-        WORD hp = *((WORD*)((uintptr_t)trg + S_HP));//unit hp
-        if ((tid < U_FARM) && (fdmg >= hp))//if damage more than hp = unit will die = add kill
-        {
-            if ((aid != U_HTRANSPORT) || (aid != U_OTRANSPORT))//no KILLS for transpots (or crash)
-            {
-                byte k = *((byte*)((uintptr_t)atk + S_KILLS));
-                if (k < 255)k += 1;
-                set_stat(atk, (int)k, S_KILLS);
+                WORD hp = *((WORD*)((uintptr_t)trg + S_HP));//unit hp
+                if ((tid < U_FARM) && (fdmg >= hp))
+                {
+                    if ((aid != U_HTRANSPORT) || (aid != U_OTRANSPORT))
+                    {
+                        byte k = *((byte*)((uintptr_t)atk + S_KILLS));
+                        if (k < 255)k += 1;
+                        set_stat(atk, (int)k, S_KILLS);
+                    }
+                }
             }
         }
     }
@@ -3556,13 +3862,8 @@ void damage6(int* atk, int* trg, char dmg)
 
 void tower_set_target(int* p, int x, int y)
 {
-    //set target manually
-    //i think there should be better way to do this
-    //cause this still possible cause some uncertain bugs
-    set_stat(p, 0, S_RETARGET_X1);
-    set_stat(p, 0, S_RETARGET_X1 + 1);
-    set_stat(p, 0, S_RETARGET_X1 + 2);
-    set_stat(p, 0, S_RETARGET_X1 + 3);
+    set_stat(p, 0, S_RETARGET_X1 - 2);
+    set_stat(p, 0, S_RETARGET_X1 - 1);
     int* u = NULL;
     set_region(x - 3, y - 3, x, y);
     find_all_alive_units(ANY_BUILDING_4x4);
@@ -3590,10 +3891,9 @@ void tower_set_target(int* p, int x, int y)
     if (units != 0)u = unit[0];
     if (u)
     {
-        set_stat(p, (int)u % 256, S_RETARGET_X1);
-        set_stat(p, (int)u / 256, S_RETARGET_X1 + 1);
-        set_stat(p, ((int)u / 256) / 256, S_RETARGET_X1 + 2);
-        set_stat(p, (((int)u / 256) / 256) / 256, S_RETARGET_X1 + 3);
+        int fx = ((int (*)(int*, int))F_UNIT_FIXUP)(u, 1);//fixup save
+        set_stat(p, (int)fx % 256, S_RETARGET_X1 - 2);
+        set_stat(p, (int)fx / 256, S_RETARGET_X1 - 1);
     }
 }
 
@@ -3623,13 +3923,11 @@ void rc_snd(int* p)
 PROC g_proc_0043B943;
 void rc_build_click(int* p,int x,int y,int* t,int a)
 {
-    //when player clicked with right click
     byte id = *(byte*)((uintptr_t)p + S_ID);
-    if (id >= U_FARM)//for buildings
+    if (id >= U_FARM)
     {
-        set_stat(p, x, S_RETARGET_X1);
-        set_stat(p, y, S_RETARGET_Y1);
-        set_stat(p, 1, S_RETARGET_X1 + 1);
+        set_stat(p, x | 128, S_RETARGET_X1 - 2);
+        set_stat(p, y, S_RETARGET_X1 - 1);
         if ((id == U_HARROWTOWER) || (id == U_OARROWTOWER) 
             || (id == U_HCANONTOWER) || (id == U_OCANONTOWER)
             || (id == U_HTOWER) || (id == U_OTOWER))
@@ -3637,7 +3935,7 @@ void rc_build_click(int* p,int x,int y,int* t,int a)
             tower_set_target(p, x, y);
         }
     }
-    else//for normal units
+    else
         ((void (*)(int*, int, int, int*, int))g_proc_0043B943)(p, x, y, t, a);//original
 }
 
@@ -3657,8 +3955,49 @@ void rc_jmp(bool b)
 }
 
 PROC g_proc_0040DF71;
-int* bld_unit_create(int a1, int a2, int a3, byte a4, int* a5)
+int* bld_unit_create(int a1,int a2,int a3,byte a4,int* a5)
 {
+    int *b = (int*)*(int*)UNIT_RUN_UNIT_POINTER;
+    int* u = ((int* (*)(int, int, int, byte, int*))g_proc_0040DF71)(a1, a2, a3, a4, a5);
+    if (replaced)
+    {
+        if (b)
+        {
+            if (u)
+            {
+                byte x = *((byte*)((uintptr_t)b + S_RETARGET_X1 - 2));
+                byte y = *((byte*)((uintptr_t)b + S_RETARGET_X1 - 1));
+                byte bp = x & 128;
+                if (bp != 0)
+                {
+                    x &= ~128;
+                    byte uid = *((byte*)((uintptr_t)u + S_ID));
+                    byte o = ORDER_ATTACK_AREA;
+                    if ((uid == U_PEON) || (uid == U_PEASANT) || (uid == U_HTANKER) || (uid == U_OTANKER))
+                        o = ORDER_HARVEST;
+                    give_order(u, x, y, o);
+                    set_stat(u, x, S_RETARGET_X1);
+                    set_stat(u, y, S_RETARGET_Y1);
+                    set_stat(u, o, S_RETARGET_ORDER);
+                }
+                if (ai_fixed)
+                {
+                    byte o = *((byte*)((uintptr_t)u + S_OWNER));
+                    byte m = *((byte*)((uintptr_t)u + S_MANA));
+                    if ((*(byte*)(CONTROLER_TYPE + o) == C_COMP))
+                    {
+                        if (m = 0x55)//85 default starting mana
+                        {
+                            char buf[] = "\xA0";//160
+                            PATCH_SET((char*)u + S_MANA, buf);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return u;
+}
     //this function called when building finished training unit
     //and new unit should be created
     int* b = (int*)*(int*)UNIT_RUN_UNIT_POINTER;//building that processed right now
@@ -3706,11 +4045,10 @@ int* tower_find_attacker(int* p)
     byte id = *((byte*)((uintptr_t)p + S_ID));
     if ((id == U_HARROWTOWER) || (id == U_OARROWTOWER) || (id == U_HCANONTOWER) || (id == U_OCANONTOWER))
     {
-        byte a1 = *((byte*)((uintptr_t)p + S_RETARGET_X1));
-        byte a2 = *((byte*)((uintptr_t)p + S_RETARGET_X1 + 1));
-        byte a3 = *((byte*)((uintptr_t)p + S_RETARGET_X1 + 2));
-        byte a4 = *((byte*)((uintptr_t)p + S_RETARGET_X1 + 3));
-        tr = (int*)(a1 + 256 * a2 + 256 * 256 * a3 + 256 * 256 * 256 * a4);
+        byte a1 = *((byte*)((uintptr_t)p + S_RETARGET_X1 - 2));
+        byte a2 = *((byte*)((uintptr_t)p + S_RETARGET_X1 - 1));
+        tr = (int*)(a1 + 256 * a2);
+        tr = ((int* (*)(int*, int))F_UNIT_FIXUP)(tr, 0);//fixup load
         if (tr)
         {
             if (!check_unit_near_death(tr) && !check_unit_dead(tr) && !check_unit_hidden(tr))
@@ -3759,6 +4097,7 @@ void unit_kill_deselect(int* u)
 {
     int* ud = u;
     ((void (*)(int*))g_proc_00451728)(u);//original
+	((void (*)())F_STATUS_REDRAW)();//status redraw
     for (int i = 0; i < 16; i++)
     {
         int* p = (int*)(UNITS_LISTS + 4 * i);
@@ -4560,474 +4899,906 @@ void sounds_tables()
 
 //write your custom victory functions here
 //-------------------------------------------------------------------------------
-void v_human1()
+void v_human1(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_human2()
+void v_human2(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_human3()
+void v_human3(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_human4()
+void v_human4(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_human5()
+void v_human5(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_human6()
+void v_human6(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_human7()
+void v_human7(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_human8()
+void v_human8(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_human9()
+void v_human9(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_human10()
+void v_human10(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_human11()
+void v_human11(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_human12()
+void v_human12(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_human13()
+void v_human13(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_human14()
+void v_human14(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xhuman1()
+void v_xhuman1(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xhuman2()
+void v_xhuman2(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xhuman3()
+void v_xhuman3(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xhuman4()
+void v_xhuman4(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xhuman5()
+void v_xhuman5(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xhuman6()
+void v_xhuman6(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xhuman7()
+void v_xhuman7(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xhuman8()
+void v_xhuman8(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xhuman9()
+void v_xhuman9(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xhuman10()
+void v_xhuman10(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xhuman11()
+void v_xhuman11(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xhuman12()
+void v_xhuman12(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_orc1()
+void v_orc1(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_orc2()
+void v_orc2(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_orc3()
+void v_orc3(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_orc4()
+void v_orc4(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_orc5()
+void v_orc5(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_orc6()
+void v_orc6(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_orc7()
+void v_orc7(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_orc8()
+void v_orc8(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_orc9()
+void v_orc9(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_orc10()
+void v_orc10(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_orc11()
+void v_orc11(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_orc12()
+void v_orc12(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_orc13()
+void v_orc13(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_orc14()
+void v_orc14(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xorc1()
+void v_xorc1(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xorc2()
+void v_xorc2(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xorc3()
+void v_xorc3(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xorc4()
+void v_xorc4(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xorc5()
+void v_xorc5(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xorc6()
+void v_xorc6(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xorc7()
+void v_xorc7(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xorc8()
+void v_xorc8(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xorc9()
+void v_xorc9(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xorc10()
+void v_xorc10(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xorc11()
+void v_xorc11(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_xorc12()
+void v_xorc12(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 
-void v_custom()
+void v_custom(bool rep_init)
 {
-    //your custom victory conditions
+	if (rep_init)
+	{
+		//pathfind_fix(true);
+		//ai_fix_plugin(true);
+		//your initialize
+	}
+	else
+	{
+		//your custom victory conditions
+	}
 }
 //-------------------------------------------------------------------------------
 
 /*
-void example1()
+void example1(bool rep_init)
 {
     //example function 1
     //lose condition - all player units dead
     //victory condition - build 6 farms and 3 barrack and 2 mills and 10 grunts AND kill blue castle
     //additions - can build critters from farms, critter gives gold
-    sheep(true);//allow build critters
-    byte local = *(byte*)LOCAL_PLAYER;
-    find_all_alive_units(U_CRITTER);
-    sort_stat(S_OWNER, local, CMP_EQ);//only player crittes, not neutral
-    change_res(local, 0, 2, units);//argument2 = 0 - gold (1 - lumber,2-oil)
-    //add 2*number of critters gold to player
-    if (!slot_alive(local))lose(true);//lose game if player not have units
-    else
-    {
-        int farms = get_val(FARM, local);
-        int barracks = get_val(BARRACKS, local);
-        int mills = get_val(LUMBERMILL, local);
-        int grunts = get_val(GRUNT, local);
-        int enemy_castle = get_val(TH3, P_BLUE);
-        //use those values for anything you want
-        if ((farms >= 6) && (barracks >= 3) && (mills >= 2) && (grunts >= 10) && (enemy_castle == 0))win(true);
-    }
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		sheep(true);//allow build critters
+		byte local = *(byte*)LOCAL_PLAYER;
+		find_all_alive_units(U_CRITTER);
+		sort_stat(S_OWNER, local, CMP_EQ);//only player crittes, not neutral
+		change_res(local, 0, 2, units);//argument2 = 0 - gold (1 - lumber,2-oil)
+		//add 2*number of critters gold to player
+		if (!slot_alive(local))lose(true);//lose game if player not have units
+		else
+		{
+			int farms = get_val(FARM, local);
+			int barracks = get_val(BARRACKS, local);
+			int mills = get_val(LUMBERMILL, local);
+			int grunts = get_val(GRUNT, local);
+			int enemy_castle = get_val(TH3, P_BLUE);
+			//use those values for anything you want
+			if ((farms >= 6) && (barracks >= 3) && (mills >= 2) && (grunts >= 10) && (enemy_castle == 0))win(true);
+		}
+	}
 }
 */
 
 /*
-void example2()
+void example2(bool rep_init)
 {
     //example function 2
     //lose condition - hero must survive
     //victory condition - bring hero to region AND kill orange knights AND kill all enemy shipyards except blue
     //additions - peons can build portals, portals can teleport to other portals
-    b3port = true;//allow building portals
-    build3(true);//new build button for peon
-    A_portal = true;//activate teleportation
-    byte local = *(byte*)LOCAL_PLAYER;
-    find_all_alive_units(U_DANATH);
-    if (units == 0)lose(true);//no hero alive found = he probably dead - lose game
-    else//if hero alive
-    {
-        set_region(10, 10, 16, 16);
-        sort_in_region();
-        if (units != 0)//if found hero inside of region
-        {
-            int ogres = get_val(KNIGHT, P_ORANGE);
-            int shipyards = 0;
-            for (int i = 0; i < 8; i++)
-            {
-                if ((i != local) && (i != P_BLUE))//not player himself and not blue comp
-                    shipyards += get_val(SHIPYARD, i);
-            }
-            if ((ogres == 0) && (shipyards == 0))win(true);
-        }
-    }
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		b3port = true;//allow building portals
+		build3(true);//new build button for peon
+		A_portal = true;//activate teleportation
+		byte local = *(byte*)LOCAL_PLAYER;
+		find_all_alive_units(U_DANATH);
+		if (units == 0)lose(true);//no hero alive found = he probably dead - lose game
+		else//if hero alive
+		{
+			set_region(10, 10, 16, 16);
+			sort_in_region();
+			if (units != 0)//if found hero inside of region
+			{
+				int ogres = get_val(KNIGHT, P_ORANGE);
+				int shipyards = 0;
+				for (int i = 0; i < 8; i++)
+				{
+					if ((i != local) && (i != P_BLUE))//not player himself and not blue comp
+						shipyards += get_val(SHIPYARD, i);
+				}
+				if ((ogres == 0) && (shipyards == 0))win(true);
+			}
+		}
+	}
 }
 */
 
 /*
-void example3()
+void example3(bool rep_init)
 {
     //example function 3
     //lose condition - at least 2 RED footmans and at least 3 YELLOW ogres must survive
     //victory condition - kill enemy hero
     //additions - peons can build runestones; runestones give haste and blood.
-    b3rune = true;//allow build runestone
-    build3(true);//give peon new build button
-    runes[2] = 1;//blood
-    runes[3] = 1;//haste
-    A_runestone = true;//activate runestone
-    find_all_alive_units(U_FOOTMAN);
-    sort_stat(S_COLOR, P_RED, CMP_EQ);
-    int red_footmans = units;
-    find_all_alive_units(U_OGRE);
-    sort_stat(S_COLOR, P_YELLOW, CMP_EQ);
-    int yellow_ogres = units;
-    if ((red_footmans < 2) || (yellow_ogres < 3))lose(true);//needed amount of units not survived
-    else
-    {
-        find_all_alive_units(U_GULDAN);//enemy hero
-        if (units == 0)win(true);//if no alive hero found = he dead
-    }
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		b3rune = true;//allow build runestone
+		build3(true);//give peon new build button
+		runes[2] = 1;//blood
+		runes[3] = 1;//haste
+		A_runestone = true;//activate runestone
+		find_all_alive_units(U_FOOTMAN);
+		sort_stat(S_COLOR, P_RED, CMP_EQ);
+		int red_footmans = units;
+		find_all_alive_units(U_OGRE);
+		sort_stat(S_COLOR, P_YELLOW, CMP_EQ);
+		int yellow_ogres = units;
+		if ((red_footmans < 2) || (yellow_ogres < 3))lose(true);//needed amount of units not survived
+		else
+		{
+			find_all_alive_units(U_GULDAN);//enemy hero
+			if (units == 0)win(true);//if no alive hero found = he dead
+		}
+	}
 }
 */
 
 /*
-void example4()
+void example4(bool rep_init)
 {
     //example function 4
     //lose condition - heroes must survive
     //victory condition - destroy all dark portals and runestones
     //addition - only Hadgar can destroy portal; only Tyralyon can destroy runestone
-    ua[0] = U_HADGAR;//attacker 0
-    ut[0] = U_PORTAL;//target 0
-    ua[1] = U_TYRALYON;//attacker 1
-    ut[1] = U_RUNESTONE;//target 1
-    find_all_alive_units(U_HADGAR);
-    int hadgars = units;
-    find_all_alive_units(U_TYRALYON);
-    int tyralyons = units;
-    if ((hadgars == 0) || (tyralyons == 0))lose(true);//no hero alive found = he probably dead - lose game
-    else//if heros alive
-    {
-        int portals = get_val(PORTAL, P_NEUTRAL);
-        int runestones = get_val(RUNESTONE, P_NEUTRAL);
-        if ((portals == 0) && (runestones == 0))win(true);
-    }
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		ua[0] = U_HADGAR;//attacker 0
+		ut[0] = U_PORTAL;//target 0
+		ua[1] = U_TYRALYON;//attacker 1
+		ut[1] = U_RUNESTONE;//target 1
+		find_all_alive_units(U_HADGAR);
+		int hadgars = units;
+		find_all_alive_units(U_TYRALYON);
+		int tyralyons = units;
+		if ((hadgars == 0) || (tyralyons == 0))lose(true);//no hero alive found = he probably dead - lose game
+		else//if heros alive
+		{
+			int portals = get_val(PORTAL, P_NEUTRAL);
+			int runestones = get_val(RUNESTONE, P_NEUTRAL);
+			if ((portals == 0) && (runestones == 0))win(true);
+		}
+	}
 }
 */
 
 /*
-void example5()
+void example5(bool rep_init)
 {
     //example function 5
     //lose condition - all player units dead OR red comp have more than 50000 gold
     //victory condition - kill red
     //addition - orc player can build hero Teron from TH on tier 2; Teron have death aura
-    heros[10] = U_TERON;//10 - slot 3 for orcs
-    m_death_aura[0] = U_TERON;
-    byte local = *(byte*)LOCAL_PLAYER;
-    if (!slot_alive(local))lose(true);//lose game if player not have units
-    else
-    {
-        int red_gold = *(int*)(GOLD + 4 * P_RED);//get red comp gold
-        if (red_gold > 50000)lose(true);
-        else
-        {
-            if (!slot_alive(P_RED))win(true);//kill red
-        }
-    }
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		heros[10] = U_TERON;//10 - slot 3 for orcs
+		m_death_aura[0] = U_TERON;
+		byte local = *(byte*)LOCAL_PLAYER;
+		if (!slot_alive(local))lose(true);//lose game if player not have units
+		else
+		{
+			int red_gold = *(int*)(GOLD + 4 * P_RED);//get red comp gold
+			if (red_gold > 50000)lose(true);
+			else
+			{
+				if (!slot_alive(P_RED))win(true);//kill red
+			}
+		}
+	}
 }
 */
 
 /*
-void example6()
+void example6(bool rep_init)
 {
     //example function 6
     //lose condition - hero survive 
     //victory condition - kill all enemies
     //addition - when player bring hero to some region he will receive message (and receive it ONLY 1 time)
     //AND hero changes stats after this
-    byte local = *(byte*)LOCAL_PLAYER;
+	if (rep_init)
+	{
+		//your initialize
+	}
+	else
+	{
+		byte local = *(byte*)LOCAL_PLAYER;
 
-    //EXAMPLE of save/load values
-    int byte_id = 0;//any id from 0 to 15
-    int saved_byte = *(byte*)(GB_HORSES + byte_id);//GB_HORSES is ussles massive in game
-    //BUT this massive saved to *.sav file and those 16 bytes can be used to load values between games
-    
-    if (saved_byte == 1)//if hero WAS in region at least once (and this info saved betweed save/load games too)
-    {
-        //give hero new abilities
-        m_sneak[0] = U_ALLERIA;//can turn invisible now
-        def_stat(U_ALLERIA, 120, 16, 32, 1, 8, 0, 0, 0, 0);//120 hp 16-32 dmg 1 armor 8 range (some big changes)
-        find_all_alive_units(U_ALLERIA);
-        set_stat_all(S_COLOR, P_RED);//new color
-    }
-    else
-    {
-        //reset all
-        m_sneak[0] = 255;
-        def_stat(U_ALLERIA, 120, 10, 20, 0, 6, 0, 0, 0, 0);//120 hp 10-20 dmg 0 armor 6 range
-        find_all_alive_units(U_ALLERIA);
-        set_stat_all(S_COLOR, P_BLUE);//default color
-    }
+		//EXAMPLE of save/load values
+		int byte_id = 0;//any id from 0 to 15
+		int saved_byte = *(byte*)(GB_HORSES + byte_id);//GB_HORSES is ussles massive in game
+		//BUT this massive saved to *.sav file and those 16 bytes can be used to load values between games
+		
+		if (saved_byte == 1)//if hero WAS in region at least once (and this info saved betweed save/load games too)
+		{
+			//give hero new abilities
+			m_sneak[0] = U_ALLERIA;//can turn invisible now
+			def_stat(U_ALLERIA, 120, 16, 32, 1, 8, 0, 0, 0, 0);//120 hp 16-32 dmg 1 armor 8 range (some big changes)
+			find_all_alive_units(U_ALLERIA);
+			set_stat_all(S_COLOR, P_RED);//new color
+		}
+		else
+		{
+			//reset all
+			m_sneak[0] = 255;
+			def_stat(U_ALLERIA, 120, 10, 20, 0, 6, 0, 0, 0, 0);//120 hp 10-20 dmg 0 armor 6 range
+			find_all_alive_units(U_ALLERIA);
+			set_stat_all(S_COLOR, P_BLUE);//default color
+		}
 
-    find_all_alive_units(U_ALLERIA);
-    if (units == 0)lose(true);//no hero alive found = he probably dead - lose game
-    else//if hero alive
-    {
-        set_region(10, 10, 16, 16);
-        sort_in_region();
-        if (units != 0)//if found hero inside of region
-        {
-            if (saved_byte == 0)//if hero was not in region even 1 time before
-            {
-                *(byte*)(GB_HORSES + byte_id) = 1;//set flag that hero visited region
-                char msg[] = "Hello there!";
-                show_message(10, msg);//show this message for 10 sec
-            }
-        }
-        if (!check_opponents(local))win(true);//if no more opponents = win
-    }
-
+		find_all_alive_units(U_ALLERIA);
+		if (units == 0)lose(true);//no hero alive found = he probably dead - lose game
+		else//if hero alive
+		{
+			set_region(10, 10, 16, 16);
+			sort_in_region();
+			if (units != 0)//if found hero inside of region
+			{
+				if (saved_byte == 0)//if hero was not in region even 1 time before
+				{
+					*(byte*)(GB_HORSES + byte_id) = 1;//set flag that hero visited region
+					char msg[] = "Hello there!";
+					show_message(10, msg);//show this message for 10 sec
+				}
+			}
+			if (!check_opponents(local))win(true);//if no more opponents = win
+		}
+	}
 }
 */
 
-void (*triggers[])() = { v_human1,v_orc1,v_human2,v_orc2,v_human3,v_orc3,v_human4,v_orc4,v_human5,v_orc5,v_human6,v_orc6,v_human7,v_orc7,v_human8,v_orc8,v_human9,v_orc9,v_human10,v_orc10,v_human11,v_orc11,v_human12,v_orc12,v_human13,v_orc13,v_human14,v_orc14,v_xhuman1,v_xorc1,v_xhuman2,v_xorc2,v_xhuman3,v_xorc3,v_xhuman4,v_xorc4,v_xhuman5,v_xorc5,v_xhuman6,v_xorc6,v_xhuman7,v_xorc7,v_xhuman8,v_xorc8,v_xhuman9,v_xorc9,v_xhuman10,v_xorc10,v_xhuman11,v_xorc11,v_xhuman12,v_xorc12 };
+void (*triggers[])(bool) = { v_human1,v_orc1,v_human2,v_orc2,v_human3,v_orc3,v_human4,v_orc4,v_human5,v_orc5,v_human6,v_orc6,v_human7,v_orc7,v_human8,v_orc8,v_human9,v_orc9,v_human10,v_orc10,v_human11,v_orc11,v_human12,v_orc12,v_human13,v_orc13,v_human14,v_orc14,v_xhuman1,v_xorc1,v_xhuman2,v_xorc2,v_xhuman3,v_xorc3,v_xhuman4,v_xorc4,v_xhuman5,v_xorc5,v_xhuman6,v_xorc6,v_xhuman7,v_xorc7,v_xhuman8,v_xorc8,v_xhuman9,v_xorc9,v_xhuman10,v_xorc10,v_xhuman11,v_xorc11,v_xhuman12,v_xorc12 };
 
 void trig()
 {
     byte lvl = *(byte*)LEVEL_OBJ;
     if (a_custom)
     {
-        v_custom();
+        v_custom(false);
     }
     else
     {
         if ((lvl >= 0) && (lvl < 52))
-            ((void (*)())triggers[lvl])();
+            ((void (*)(bool))triggers[lvl])(false);
         else
-            v_custom();
+            v_custom(false);
+    }
+	first_step = false;
+}
+
+void trig_init()
+{
+	first_step = true;
+    byte lvl = *(byte*)LEVEL_OBJ;
+    if (a_custom)
+    {
+        v_custom(true);
+    }
+    else
+    {
+        if ((lvl >= 0) && (lvl < 52))
+            ((void (*)(bool))triggers[lvl])(true);
+        else
+            v_custom(true);
     }
 }
 
@@ -5047,11 +5818,14 @@ void replace_def()
     memset(m_devotion, 255, sizeof(m_devotion));
     memset(m_vampire, 255, sizeof(m_vampire));
     memset(m_prvnt, 255, sizeof(m_prvnt));
+	memset(vizs_areas, 0, sizeof(vizs_areas));
+	vizs_n = 0;
     table = false;
     agr = false;
     cpt = false;
     pcpt = false;
     thcpt = false;
+	ucpt = false;
     steal = false;
     aport = false;
     mport = false;
@@ -5070,6 +5844,8 @@ void replace_def()
     more_res = false;
 	path_fixed = false;
     ai_fixed = false;
+	saveload_fixed = false;
+	peon_steal = false;
 }
 
 void replace_common()
@@ -5183,6 +5959,7 @@ void replace_trigger()
     void (*repf) () = trig;
     patch_setdword((DWORD*)(rep + 6), (DWORD)repf);
     PATCH_SET((char*)VICTORY_TRIGGER, rep);
+	trig_init();
 }
 
 PROC g_proc_0042A4A1;
@@ -5196,6 +5973,14 @@ void new_game(int a, int b, long c)
 	}
     replace_trigger();
     ((void (*)(int, int, long))g_proc_0042A4A1)(a, b, c);//original
+}
+
+PROC g_proc_0041F7E4;
+int load_game(int a)
+{
+    int original = ((int (*)(int))g_proc_0041F7E4)(a);//original
+    replace_trigger();
+    return original;
 }
 
 void hook(int adr, PROC* p, char* func)
@@ -5244,6 +6029,7 @@ void common_hooks()
     hook(0x00427FAE, &g_proc_00427FAE, (char*)ai_attack);
 	
 	hook(0x0042A4A1, &g_proc_0042A4A1, (char*)new_game);
+	hook(0x0041F7E4, &g_proc_0041F7E4, (char*)load_game);
 }
 
 extern "C" __declspec(dllexport) void w2p_init()
