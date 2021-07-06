@@ -3694,8 +3694,6 @@ char fdmg = 0;//final damage
 void damage(int* atk, int* trg, char dmg)
 {
     fdmg = dmg;
-    if (replaced)
-    {
         if ((trg != NULL) && (atk != NULL))
         {
             if (!check_unit_dead(trg))
@@ -3728,22 +3726,6 @@ void damage(int* atk, int* trg, char dmg)
                     if (*((WORD*)((uintptr_t)atk + S_BLOOD)) != 0)bdmg *= 2;
                     if (bdmg > 255)bdmg = 255;
                     if (bdmg != 0)dmg2 = bdmg % 256;
-                }
-                if (war2mod)
-                {
-                    if (aid == U_DEMON)
-                    {
-                        byte tmov = *((byte*)((uintptr_t)trg + S_MOVEMENT_TYPE));//target mov
-                        if (tmov == MOV_AIR)
-                        {
-                            if (dmg2 != 0)
-                            {
-                                int bdmg = dmg2 * 7;
-                                if (bdmg > 255)bdmg = 255;
-                                if (bdmg != 0)dmg2 = bdmg % 256;
-                            }
-                        }
-                    }
                 }
                 fdmg = dmg2;
                 if (agr)comp_aggro(trg, atk);//check if allied comps go agro
@@ -3821,7 +3803,6 @@ void damage(int* atk, int* trg, char dmg)
                 }
             }
         }
-    }
 }
 
 void damage1(int* atk, int* trg, char dmg)
@@ -3957,14 +3938,14 @@ void rc_jmp(bool b)
 PROC g_proc_0040DF71;
 int* bld_unit_create(int a1,int a2,int a3,byte a4,int* a5)
 {
-    int *b = (int*)*(int*)UNIT_RUN_UNIT_POINTER;
+    //this function called when building finished training unit
+    //and new unit should be created
+    int* b = (int*)*(int*)UNIT_RUN_UNIT_POINTER;//building that processed right now
     int* u = ((int* (*)(int, int, int, byte, int*))g_proc_0040DF71)(a1, a2, a3, a4, a5);
-    if (replaced)
+    if (b)//building
     {
-        if (b)
+        if (u)//unit that was created (will be NULL if was not created (ex: no place))
         {
-            if (u)
-            {
                 byte x = *((byte*)((uintptr_t)b + S_RETARGET_X1 - 2));
                 byte y = *((byte*)((uintptr_t)b + S_RETARGET_X1 - 1));
                 byte bp = x & 128;
@@ -3995,46 +3976,6 @@ int* bld_unit_create(int a1,int a2,int a3,byte a4,int* a5)
                 }
             }
         }
-    }
-    return u;
-}
-    //this function called when building finished training unit
-    //and new unit should be created
-    int* b = (int*)*(int*)UNIT_RUN_UNIT_POINTER;//building that processed right now
-    int* u = ((int* (*)(int, int, int, byte, int*))g_proc_0040DF71)(a1, a2, a3, a4, a5);
-    if (b)//building
-    {
-        if (u)//unit that was created (will be NULL if was not created (ex: no place))
-        {
-            byte bp = *((byte*)((uintptr_t)b + S_RETARGET_X1 + 1));
-            if (bp == 1)
-            {
-                byte x = *((byte*)((uintptr_t)b + S_RETARGET_X1));
-                byte y = *((byte*)((uintptr_t)b + S_RETARGET_Y1));
-                byte uid = *((byte*)((uintptr_t)u + S_ID));
-                byte o = ORDER_ATTACK_AREA;
-                if ((uid == U_PEON) || (uid == U_PEASANT) || (uid == U_HTANKER) || (uid == U_OTANKER))
-                    o = ORDER_HARVEST;
-                give_order(u, x, y, o);
-                set_stat(u, x, S_RETARGET_X1);
-                set_stat(u, y, S_RETARGET_Y1);
-                set_stat(u, o, S_RETARGET_ORDER);
-            }
-            if (ai_fixed)
-            {
-				byte o = *((byte*)((uintptr_t)u + S_OWNER));
-				byte m = *((byte*)((uintptr_t)u + S_MANA));
-				if ((*(byte*)(CONTROLER_TYPE + o) == C_COMP))
-				{
-					if (m = 0x55)//85 default starting mana
-					{
-						char buf[] = "\xA0";//160
-                        PATCH_SET((char*)u + S_MANA, buf);
-                    }
-                }
-            }
-        }
-    }
     return u;
 }
 
