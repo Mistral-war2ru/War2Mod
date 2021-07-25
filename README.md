@@ -2,7 +2,7 @@
 War2Mod open source version
 
 can be compiled with MinGW GCC compiler (i used gcc 10.2.0)
-or you can put those files to Microsoft Visual Studio and compile there (i used MVS 2019 and project was set with 144_xp build tools)
+or you can put those files to Microsoft Visual Studio 2013 and compile with 120_xp build tools
 
 This files itself is just template. You must fill empty victory conditions functions in w2p.cpp before compiling.
 
